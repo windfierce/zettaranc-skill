@@ -256,7 +256,7 @@ STRATEGY_MAPPING: dict[str, tuple[str, str, str]] = {
     "B3": ("B3", "consensus", "BUY"),
     "SB1": ("超级B1", "rebound", "BUY"),
     "长安": ("长安", "breakout", "BUY"),
-    "四分之三阴量": ("四分之三阴量", "rebound", "BUY"),
+    "四分之三阴量": ("四分之三阴量", "risk", "SELL"),
     "娜娜": ("娜娜", "pattern", "BUY"),
     "异动+地量地价": ("异动地量", "rebound", "BUY"),
     "平行重炮": ("平行重炮", "breakout", "BUY"),
