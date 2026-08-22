@@ -2,6 +2,46 @@
 
 所有值得记录的变更都会写在这里。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## v4.2.0 (2026-08-22) — 同花顺官方数据源接入（hithink-finance）
+
+> **「v4.2.0：配置一个 Key，默认数据源即可切到同花顺官方 A 股数据服务」**
+
+### 新增
+
+- **同花顺金融数据服务（hithink-finance）官方数据源**
+  - 新增 `modules/hithink_client.py`：封装 https://fuyao.aicubes.cn REST API（GET + `X-api-key` 鉴权，`{code,message,request_id,data}` 信封校验，限流 4001/5xxx 有界退避重试 ≤3 次）
+    - 个股/指数历史日 K：`/api/a-share[-index]/prices/historical`（`adjust=none` 对齐 tushare pro.daily 不复权语义；自动多拉 20 个日历日回看段，保证窗口首行 pct_chg 真实）
+    - 实时行情快照：`/api/a-share/prices/snapshot` + `/api/a-share/valuations/snapshot` 合并（快照无 name 字段，估值快照补齐 name / PE-TTM / PB-MRQ；批量按 100 个 thscode 分块）
+    - 标的检索与全量代码表：`/api/meta/tickers/search|list`（分页终止条件：短页或空页，硬上限 20000 条防死循环）
+    - 交易日历：`/api/a-share/calendar/trading-days`（上游固定回看一年窗口，超出窗口只返回交集并注明）
+  - 新增 `HithinkFinanceDataSource` 封装（`modules/datasource.py`）：实现 DataSource Protocol 全部方法
+  - 能力边界：资金流向 / 技术因子上游不公开提供，显式返回 None 由回退链兜底
+- **CompositeDataSource 注册与优先级调整**
+  - `VALID_PREFERRED` 新增 `"hithink"`；`get_datasource(preferred="hithink")` 直连官方源
+  - auto 模式优先链变为：**hithink（配置 HITHINK_FINANCE_API_KEY 时最优先）→ indevs → tushare(JNB) → a-stock-data → bridge → sqlite**
+  - 未配置 HITHINK_FINANCE_API_KEY 时行为与 v4.1.0 完全一致（零配置仍走 a-stock-data 免费源）
+- **配置**
+  - `.env.example` 新增 HITHINK 配置段（`HITHINK_FINANCE_API_KEY` / `HITHINK_FINANCE_API_URL`）
+  - 本地 `.env` 写入用户 Key（gitignored，不入库）
+- **测试**
+  - 新增 `tests/test_hithink_client.py`（34 用例，全 mock 零网络）：信封解析、重试策略、K 线映射与回看裁剪、实时行情合并、目录分页、交易日历过滤、CompositeDataSource 注册与优先级
+  - `tests/conftest.py` 清理清单新增 `HITHINK_FINANCE_API_KEY` / `HITHINK_FINANCE_API_URL`，保证用例对开发者本地 `.env` 封闭
+  - 全量回归：**1443 passed, 15 skipped**
+
+### 数据源映射（tushare 接口 → hithink 替代）
+
+| tushare 接口 | hithink 端点 | 说明 |
+|------|------|------|
+| `pro.daily()` | `/api/a-share/prices/historical?adjust=none` | 日 K，vol=股、amount=元透传 |
+| `pro.index_daily()` | `/api/a-share-index/prices/historical` | 指数日 K，需显式 interval=1d |
+| `pro.realtime_quote()` | `prices/snapshot` + `valuations/snapshot` | 两批请求合并出全字段 |
+| `pro.daily_basic()` | `/api/a-share/valuations/snapshot` | PE/PB/PS/PCF 快照口径 |
+| `pro.stock_basic()` | `/api/meta/tickers/search\|list` | 无行业/上市日期字段，留空待补 |
+| `pro.trade_cal()` | `/api/a-share/calendar/trading-days` | 固定回看一年，不支持未来日期 |
+| `pro.moneyflow()` / `stk_factor()` | — | 上游不提供，回退其他源 |
+
+---
+
 ## v4.1.0 (2026-07-23) — 免费数据源集成（a-stock-data）
 
 > **「v4.1.0：零积分、零配置即可获取 A 股实时数据」**
@@ -1801,7 +1841,7 @@ Python层（数据准备）              LLM层（点评）
   - 与防卖飞 V1.4 的边界：假洗盘走防卖飞，真出货走 S1 直接卖
 - **modules/key-candles.md** — 关键 K 理论：
   - 6 种趋势转换：V 型反转 / 紧急刹车 / 平地惊雷 / 丢盔弃甲 / A 杀反转 / 一拍拍死
-  - 衰竭信号：卖盘枯竭 + 买盘枯竭
+  - 衰竭信号：卖盘枯竭（B1 类买点）+ 买盘枯竭（S1 卖出信号）
   - 主力打明牌的 3 个前提
 - **modules/advanced-patterns.md** — 高级战法合集：
   - 长安战法（75% 胜率，全 A 仅约 20 次）
@@ -1809,7 +1849,7 @@ Python层（数据准备）              LLM层（点评）
   - 灾后重建（放量金叉后缩量回踩黄线=最后震仓）
   - 跃跃欲试（横盘多次放量红肥绿瘦）
   - 坑里起好货/祖冲之法（目标价=2a-b）
-  - 四分之三阴量战法（判断真假突破，成功率 90%+）
+  - 四分之三阴量战法（卖出/逃顶：判断真假突破，成功率 90%+）
   - 异动+地量地价（A 股选股核心逻辑）
   - 对称 VA 战法（多空守恒，只有守恒被破坏才有交易价值）
   - B2/B3 完整体系（量化指标、建仓方式、衰竭点）

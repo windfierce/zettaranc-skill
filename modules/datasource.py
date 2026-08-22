@@ -20,6 +20,7 @@ from .bridge_client import (
     set_bridge_config,
 )
 from .database import get_connection, save_klines
+from .hithink_client import HithinkFinanceClient
 from .indevs_client import IndevsClient
 from .tushare_client import TushareClient
 from .a_stock_data_client import AStockDataClient
@@ -383,6 +384,84 @@ class BridgeDataSource:
         return get_daily_klines(ts_code, days=days, start_date=start_date, end_date=end_date, config=self._config)
 
 
+class HithinkFinanceDataSource:
+    """同花顺金融数据服务（hithink-finance）官方数据源封装。
+
+    配置 ``HITHINK_FINANCE_API_KEY`` 后启用；auto 模式下作为最优先数据源。
+    数据映射：
+      - 日K线（个股/指数） -> /api/a-share[-index]/prices/historical
+      - 实时行情           -> /api/a-share/prices/snapshot + valuations/snapshot 合并
+      - 股票基础信息       -> /api/meta/tickers/search|list
+      - 交易日历           -> /api/a-share/calendar/trading-days
+      - 资金流向 / 技术因子 -> 上游不提供，返回 None 由调用方回退其他数据源
+    """
+
+    def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
+        self._client = HithinkFinanceClient(api_key, base_url)
+
+    @property
+    def name(self) -> str:
+        """数据源标识名"""
+        return "hithink"
+
+    @property
+    def is_configured(self) -> bool:
+        """是否已配置 API Key"""
+        return self._client.is_configured
+
+    def health_check(self) -> bool:
+        """检查数据源连通性"""
+        return self._client.health_check()
+
+    def get_daily(
+        self, ts_code: str, start_date: str | None = None, end_date: str | None = None
+    ) -> pd.DataFrame | None:
+        """获取个股日线行情（OHLCV + 涨跌幅）"""
+        return self._client.get_daily(ts_code, start_date, end_date)
+
+    def get_index_daily(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame | None:
+        """获取指数日线行情"""
+        return self._client.get_index_daily(ts_code, start_date, end_date)
+
+    def get_realtime_quote(self, ts_codes: list[str]) -> pd.DataFrame | None:
+        """获取实时行情快照"""
+        return self._client.get_realtime_quote(ts_codes)
+
+    def get_moneyflow(self, ts_code: str, trade_date: str) -> pd.DataFrame | None:
+        """获取个股资金流向（hithink 不提供，返回 None）"""
+        return None
+
+    def get_daily_basic(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame | None:
+        """获取个股每日基础指标"""
+        return self._client.get_daily_basic(ts_code, start_date, end_date)
+
+    def get_stk_factor(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame | None:
+        """获取个股技术因子（hithink 不提供，返回 None）"""
+        return None
+
+    def get_stock_basic(self, ts_code: str | None = None, name: str | None = None) -> pd.DataFrame | None:
+        """获取股票基础信息"""
+        return self._client.get_stock_basic(ts_code, name)
+
+    def get_trade_cal(self, exchange: str, start_date: str, end_date: str) -> pd.DataFrame | None:
+        """获取交易日历"""
+        return self._client.get_trade_cal(exchange, start_date, end_date)
+
+    def get_stock_list(self, exchange: str | None = None) -> list[dict]:
+        """获取股票列表"""
+        return self._client.get_stock_list(exchange)
+
+    def get_kline_dicts(
+        self,
+        ts_code: str,
+        days: int = 60,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict]:
+        """获取 K 线 dict 列表"""
+        return self._client.get_kline_dicts(ts_code, days, start_date, end_date)
+
+
 class SqliteDataSource:
     """本地 SQLite 数据源封装。"""
 
@@ -525,19 +604,23 @@ class CompositeDataSource:
     """组合数据源：按配置优先级自动回退。
 
     默认优先级（preferred="auto"），按环境变量 token 感知：
-      - 配置了 INDEVS_API_KEY -> indevs 最优先
+      - 配置了 HITHINK_FINANCE_API_KEY -> hithink（同花顺官方）最优先
+      - 否则配置了 INDEVS_API_KEY -> indevs
       - 否则 JNB 模式（DATA_MODE=jnb）配置了 TUSHARE_TOKEN -> tushare 优先
       - 然后 a-stock-data（免费）-> bridge -> SQLite 依次兜底
 
     说明：websearch 模式下 TushareClient._pro=None（无数据后端），即使配置了
     TUSHARE_TOKEN 也不路由 tushare，直接走 a-stock-data——这正是父版本行为，
     避免「有 token 老用户」被路由到不可用的 tushare 后崩溃或静默 0 行。
+    hithink 同理自带 is_configured 探测：未配置 Key 时不进入优先链，
+    其取数方法返回 None 时由回退链自动落到下一源。
 
-    即：零配置新用户默认 a-stock-data（腾讯/百度/东财等免费公开接口，无需 API Key）；
-    已配置 token 的老用户行为不变，不会被静默切换到免费源。
+    即：配置了同花顺 Key 的用户默认走官方数据；零配置新用户默认 a-stock-data
+    （腾讯/百度/东财等免费公开接口，无需 API Key）；已配置其他 token 的老用户
+    行为不变，不会被静默切换。
     """
 
-    VALID_PREFERRED = ("auto", "tushare", "indevs", "bridge", "sqlite", "a-stock-data")
+    VALID_PREFERRED = ("auto", "hithink", "tushare", "indevs", "bridge", "sqlite", "a-stock-data")
 
     def __init__(self, preferred: str = "auto") -> None:
         if preferred not in self.VALID_PREFERRED:
@@ -551,6 +634,7 @@ class CompositeDataSource:
         self._tushare: TushareDataSource | None = None
         self._indevs: IndevsDataSource | None = None
         self._a_stock_data: AStockDataDataSource | None = None
+        self._hithink: HithinkFinanceDataSource | None = None
 
     @property
     def _tushare_source(self) -> TushareDataSource:
@@ -570,15 +654,24 @@ class CompositeDataSource:
             self._a_stock_data = AStockDataDataSource()
         return self._a_stock_data
 
+    @property
+    def _hithink_source(self) -> HithinkFinanceDataSource:
+        if self._hithink is None:
+            self._hithink = HithinkFinanceDataSource()
+        return self._hithink
+
     def _preferred_token_source(self) -> DataSource | None:
         """按环境变量返回 auto 模式的优先数据源。
 
-        配置了 INDEVS_API_KEY 时用 indevs；
-        否则仅 JNB 模式（DATA_MODE=jnb）且配置了 TUSHARE_TOKEN 时用 tushare——
+        配置了 HITHINK_FINANCE_API_KEY 时用 hithink（同花顺官方）最优先；
+        否则配置了 INDEVS_API_KEY 时用 indevs；
+        再否则仅 JNB 模式（DATA_MODE=jnb）且配置了 TUSHARE_TOKEN 时用 tushare——
         websearch 模式下 TushareClient._pro=None（无数据后端），路由过去必然失败，
         直接回退 a-stock-data，与父版本「auto 不碰 tushare」的行为一致；
         零配置返回 None（由调用方回退 a-stock-data）。
         """
+        if os.environ.get("HITHINK_FINANCE_API_KEY"):
+            return self._hithink_source
         if os.environ.get("INDEVS_API_KEY"):
             return self._indevs_source
         if os.environ.get("DATA_MODE", "websearch") == "jnb" and os.environ.get("TUSHARE_TOKEN"):
@@ -646,7 +739,9 @@ class CompositeDataSource:
             return self._indevs_source.health_check()
         if self._preferred == "a-stock-data":
             return self._a_stock_data_source.health_check()
-        # auto: 按 token 感知优先级链依次探测（indevs/tushare -> a-stock-data -> bridge -> sqlite），
+        if self._preferred == "hithink":
+            return self._hithink_source.health_check()
+        # auto: 按 token 感知优先级链依次探测（hithink/indevs/tushare -> a-stock-data -> bridge -> sqlite），
         # 任一源探测异常（如 tushare 配置不完整）时记录并继续下一源，保持 bool 返回契约
         for source in self._auto_sources():
             try:
@@ -671,6 +766,8 @@ class CompositeDataSource:
 
     def get_daily(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame | None:
         """获取个股日线行情（OHLCV + 涨跌幅）"""
+        if self._preferred == "hithink":
+            return self._hithink_source.get_daily(ts_code, start_date, end_date)
         if self._preferred == "a-stock-data":
             return self._a_stock_data_source.get_daily(ts_code, start_date, end_date)
         if self._preferred == "auto":
@@ -684,6 +781,8 @@ class CompositeDataSource:
 
     def get_index_daily(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame | None:
         """获取指数日线行情"""
+        if self._preferred == "hithink":
+            return self._hithink_source.get_index_daily(ts_code, start_date, end_date)
         if self._preferred == "a-stock-data":
             return self._a_stock_data_source.get_index_daily(ts_code, start_date, end_date)
         if self._preferred == "auto":
@@ -696,6 +795,8 @@ class CompositeDataSource:
 
     def get_realtime_quote(self, ts_codes: list[str]) -> pd.DataFrame | None:
         """获取实时行情快照（多只股票批量查询）"""
+        if self._preferred == "hithink":
+            return self._hithink_source.get_realtime_quote(ts_codes)
         if self._preferred == "a-stock-data":
             return self._a_stock_data_source.get_realtime_quote(ts_codes)
         if self._preferred == "auto":
@@ -708,6 +809,8 @@ class CompositeDataSource:
 
     def get_moneyflow(self, ts_code: str, trade_date: str) -> pd.DataFrame | None:
         """获取个股资金流向（特大单 / 大单 / 中单 / 小单）"""
+        if self._preferred == "hithink":
+            return None  # hithink 不提供资金流向
         if self._preferred == "a-stock-data":
             return self._a_stock_data_source.get_moneyflow(ts_code, trade_date)
         if self._preferred == "auto":
@@ -720,6 +823,8 @@ class CompositeDataSource:
 
     def get_daily_basic(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame | None:
         """获取个股每日基础指标（换手率 / PE / PB / 总市值等）"""
+        if self._preferred == "hithink":
+            return self._hithink_source.get_daily_basic(ts_code, start_date, end_date)
         if self._preferred == "a-stock-data":
             return self._a_stock_data_source.get_daily_basic(ts_code, start_date, end_date)
         if self._preferred == "auto":
@@ -732,6 +837,8 @@ class CompositeDataSource:
 
     def get_stk_factor(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame | None:
         """获取个股技术因子（动量 / 量价等）"""
+        if self._preferred == "hithink":
+            return None  # hithink 不提供技术因子
         if self._preferred == "a-stock-data":
             return None  # a-stock-data 不支持
         if self._preferred == "auto":
@@ -745,6 +852,8 @@ class CompositeDataSource:
 
     def get_stock_basic(self, ts_code: str | None = None, name: str | None = None) -> pd.DataFrame | None:
         """获取股票基础信息（行业 / 上市日期 / 股本等）"""
+        if self._preferred == "hithink":
+            return self._hithink_source.get_stock_basic(ts_code, name)
         if self._preferred == "a-stock-data":
             return self._a_stock_data_source.get_stock_basic(ts_code, name)
         if self._preferred == "auto":
@@ -757,6 +866,8 @@ class CompositeDataSource:
 
     def get_trade_cal(self, exchange: str, start_date: str, end_date: str) -> pd.DataFrame | None:
         """获取交易日历（指定交易所）"""
+        if self._preferred == "hithink":
+            return self._hithink_source.get_trade_cal(exchange, start_date, end_date)
         if self._preferred == "a-stock-data":
             return None  # a-stock-data 不支持
         if self._preferred == "auto":
@@ -773,6 +884,8 @@ class CompositeDataSource:
         sources: list[DataSource] = []
         if self._preferred == "auto":
             sources = self._auto_sources()
+        elif self._preferred == "hithink":
+            sources = [self._hithink_source, self._a_stock_data_source, self._indevs_source, self._bridge, self._sqlite]
         elif self._preferred == "a-stock-data":
             sources = [self._a_stock_data_source, self._indevs_source, self._bridge, self._sqlite]
         elif self._preferred == "bridge":
@@ -854,6 +967,8 @@ class CompositeDataSource:
         sources: list[DataSource] = []
         if self._preferred == "auto":
             sources = self._auto_sources()
+        elif self._preferred == "hithink":
+            sources = [self._hithink_source, self._a_stock_data_source, self._indevs_source, self._bridge, self._sqlite]
         elif self._preferred == "a-stock-data":
             sources = [self._a_stock_data_source, self._indevs_source, self._bridge, self._sqlite]
         elif self._preferred == "bridge":
@@ -999,8 +1114,8 @@ def get_datasource(preferred: str = "auto") -> DataSource:
     """数据源工厂函数。
 
     preferred="auto" 时默认使用 CompositeDataSource，优先级（token 感知）：
-    indevs（配置 INDEVS_API_KEY）-> tushare（配置 TUSHARE_TOKEN）
-    -> a-stock-data（免费）-> bridge -> sqlite
+    hithink（配置 HITHINK_FINANCE_API_KEY，同花顺官方）-> indevs（配置 INDEVS_API_KEY）
+    -> tushare（配置 TUSHARE_TOKEN）-> a-stock-data（免费）-> bridge -> sqlite
     """
     if preferred == "tushare":
         return TushareDataSource()
@@ -1012,4 +1127,6 @@ def get_datasource(preferred: str = "auto") -> DataSource:
         return IndevsDataSource()
     if preferred == "a-stock-data":
         return AStockDataDataSource()
+    if preferred == "hithink":
+        return HithinkFinanceDataSource()
     return CompositeDataSource("auto")

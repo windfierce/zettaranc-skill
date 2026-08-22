@@ -25,9 +25,16 @@ def mock_env_for_tests():
             "DB_PATH": db_path,
             "DATA_DIR": tmpdir,
         }
-        # 清除可能影响测试的已有变量
+        # 清除可能影响测试的已有变量（含开发者本地 .env 注入的数据源 Key，保证用例封闭）
         for key in list(os.environ.keys()):
-            if key in ("DATA_MODE", "DB_PATH", "DATA_DIR", "TUSHARE_TOKEN"):
+            if key in (
+                "DATA_MODE",
+                "DB_PATH",
+                "DATA_DIR",
+                "TUSHARE_TOKEN",
+                "HITHINK_FINANCE_API_KEY",
+                "HITHINK_FINANCE_API_URL",
+            ):
                 del os.environ[key]
         os.environ.update(env_vars)
         yield db_path

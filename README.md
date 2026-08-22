@@ -6,9 +6,9 @@
 基于 ~200 万字语料蒸馏，60+ 指标，30+ 战法，可回测可模拟、可自改进、可走完整闭环。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-4.1.0-green)](docs/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-4.2.0-green)](docs/CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-1383%20passed%20%7C%2016%20skipped-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1443%20passed%20%7C%2015%20skipped-brightgreen)](tests/)
 [![Quality Gate](https://img.shields.io/badge/quality-12%2F12-blue)](corpus/quality_check.py)
 [![Skill](https://img.shields.io/badge/Skill--Schema--V2-✓-purple)](SKILL.md)
 
@@ -28,7 +28,7 @@ echo "DATA_MODE=websearch" > .env
 zt analyze 600519.SH  # 用框架分析茅台，自动获取实时行情
 ```
 
-> **数据源说明**：默认集成 [a-stock-data](https://github.com/simonlin1212/a-stock-data) 免费数据源（腾讯/百度/东财/通达信），零积分即可使用实时行情、K 线、股票信息等。也可配置 `DATA_PREFERRED=tushare` 切回 tushare。详见 [CHANGELOG](docs/CHANGELOG.md)。
+> **数据源说明**：默认集成 [a-stock-data](https://github.com/simonlin1212/a-stock-data) 免费数据源（腾讯/百度/东财/通达信），零积分即可使用实时行情、K 线、股票信息等。v4.2.0 起支持 [同花顺官方金融数据服务](https://fuyao.aicubes.cn/)（hithink-finance），配置 `HITHINK_FINANCE_API_KEY` 后自动作为最优先数据源。详见 [CHANGELOG](docs/CHANGELOG.md)。
 
 ---
 
@@ -706,12 +706,13 @@ python -m modules.cli simulate 000001.SZ --days 250 --atr-sizing --json
 
 | 优先级 | 数据来源 | 需要的配置 | 说明 |
 |--------|---------|-----------|------|
-| 1. Indevs | `INDEVS_API_KEY` | Tushare Replay 数据 | 配置后最优先 |
-| 2. Tushare Pro | `TUSHARE_TOKEN` + `TUSHARE_API_URL` | 实时行情、财务数据、资金流向 | 数据最全 |
-| 3. a-stock-data | 无需配置（零配置时的默认） | 实时行情、K 线、股票信息 | 免费源（v4.1.0 新增，腾讯/百度/东财/通达信） |
-| 4. tushare-data-bridge | `TUSHARE_BRIDGE_ENABLED=auto/always` | HTTP 代理缓存的数据 | Tushare 直连受限时自动回退 |
-| 5. 本地 SQLite | 已执行过 `python -m modules.data_sync sync` | `data/stock_data.db` | 离线 / 限额时的最后保障 |
-| 6. Websearch 模式 | `DATA_MODE=websearch` | 无需任何 Token | 纯框架与历史知识问答，无实时数据 |
+| 1. hithink（同花顺官方） | `HITHINK_FINANCE_API_KEY`（[获取](https://fuyao.aicubes.cn/admin)） | 实时行情、日 K、估值快照、交易日历、标的目录 | 官方数据（v4.2.0 新增，配置后最优先） |
+| 2. Indevs | `INDEVS_API_KEY` | Tushare Replay 数据 | 配置后次优先 |
+| 3. Tushare Pro | `TUSHARE_TOKEN` + `TUSHARE_API_URL` | 实时行情、财务数据、资金流向 | JNB 模式生效 |
+| 4. a-stock-data | 无需配置（零配置时的默认） | 实时行情、K 线、股票信息 | 免费源（v4.1.0 新增，腾讯/百度/东财/通达信） |
+| 5. tushare-data-bridge | `TUSHARE_BRIDGE_ENABLED=auto/always` | HTTP 代理缓存的数据 | Tushare 直连受限时自动回退 |
+| 6. 本地 SQLite | 已执行过 `python -m modules.data_sync sync` | `data/stock_data.db` | 离线 / 限额时的最后保障 |
+| 7. Websearch 模式 | `DATA_MODE=websearch` | 无需任何 Token | 纯框架与历史知识问答，无实时数据 |
 
 > 即使处于降级路径，本工具也**不会编造价格或信号**，而是明确告知用户当前数据状态。
 
@@ -967,7 +968,7 @@ print(format_report(report))
 ```python
 from modules.datasource import get_datasource
 
-# 自动按优先级选数据源（Indevs → Tushare → a-stock-data → bridge → SQLite）
+# 自动按优先级选数据源（hithink → Indevs → Tushare → a-stock-data → bridge → SQLite）
 ds = get_datasource(preferred="auto")
 df = ds.get_kline_dicts("600487.SH", start_date="20250101", end_date="20260601")
 ```
@@ -983,10 +984,12 @@ df = ds.get_kline_dicts("600487.SH", start_date="20250101", end_date="20260601")
 | **JNB 模式** | `DATA_MODE=jnb` | 接入 Tushare 真实行情，具备实时数据查询、技术指标计算、战法识别能力 |
 | **普通小万** | `DATA_MODE=websearch` | 纯 LLM 对话，不走任何外部数据接口 |
 
-### 五层数据路径降级
+### 六层数据路径降级
 
 ```
-Indevs ──────────┐
+hithink ─────────┐
+（同花顺官方）   │
+Indevs ──────────┤
 Tushare Pro ─────┤
 a-stock-data ────┤
 （免费源）       ├──► CompositeDataSource ──► DataSource Protocol
@@ -996,6 +999,8 @@ bridge (HTTP) ───┤    并行安全、pickle 预检）
                  │
 DATA_MODE=websearch 模式（纯框架与历史知识）
 ```
+
+> 配置 `HITHINK_FINANCE_API_KEY` 后 hithink 最优先；未配置时从 Indevs/Tushare 开始，与旧版一致。
 
 ### 项目结构
 
@@ -1009,7 +1014,7 @@ zettaranc-skill/
 ├── LICENSE                       # MIT
 ├── skill.json                    # Skill 元数据
 ├── docs/                         # 项目文档
-│   ├── CHANGELOG.md              # 版本变更日志（v4.1.0 最新）
+│   ├── CHANGELOG.md              # 版本变更日志（v4.2.0 最新）
 │   ├── USER_GUIDE.md             # 详细使用手册
 │   ├── CONFIG_GUIDE.md           # 配置指南
 │   ├── intent-router-design.md   # 意图路由设计文档
@@ -1040,6 +1045,7 @@ zettaranc-skill/
 │   ├── datasource.py             # 统一数据源协议（Indevs / Tushare / a-stock-data / Bridge / SQLite / Composite）
 │   ├── tushare_client.py         # Tushare Pro API 封装（120 次/分钟限流）
 │   ├── a_stock_data_client.py    # 免费数据源封装（腾讯/百度/东财/通达信，v4.1.0 新增）
+│   ├── hithink_client.py         # 同花顺官方数据源封装（hithink-finance，v4.2.0 新增）
 │   ├── bridge_client.py          # tushare-data-bridge HTTP 客户端（v3.2.0 新增）
 │   ├── data_sync.py              # 向后兼容 shim → 实际逻辑在 `modules/data_sync/`
 │   ├── data_sync/                # 数据同步子包（增量 / 全量 / 限流）
@@ -1322,6 +1328,7 @@ zettaranc ❯ 平安银行 250 天模拟，A 股真实约束 + ATR 仓位：
 
 | 版本 | 核心变化 |
 |------|---------|
+| **v4.2.0** | 同花顺官方数据源接入（hithink-finance，配置 Key 即最优先） | ✅ 已完成 |
 | **v3.7.3** | 少妇战法 v1.0 验收 walk_forward 真切片（OOS/IS 从假 1.0 → 真 1.91） | ✅ 已完成 |
 | **v3.7.2** | 少妇战法 v1.0 验收 Calmar 加权寻优（4/5 平台确认 + 5/5 路径图） | ✅ 已完成 |
 | **v3.7.1** | 少妇战法 v1.0 验收参数寻优（1/5 → 4/5 passed_count） | ✅ 已完成 |
