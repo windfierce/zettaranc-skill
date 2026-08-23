@@ -7,6 +7,7 @@ import pytest
 from modules.indicators import DailyData
 from modules.strategies.b1_b2_confirm import B1B2Config, has_b1_in_window, is_b2_signal, is_high_open_skip
 from modules.backtest.b1_b2_backtest import _run_stock_klines, _default_loop_config
+from modules.active_market_value import GateAction
 
 
 def _make_klines(n=40, start="20260101"):
@@ -109,7 +110,7 @@ def test_run_stock_klines_smoke():
 def test_date_window_start_only_no_typeerror():
     """只设 start_date、end_date=None 时不应抛 TypeError。"""
     klines = _make_b2_klines()
-    with patch("modules.backtest.b1_b2_backtest.get_active_market_gate", return_value="OPEN"):
+    with patch("modules.active_market_value.apply_active_mv_gate", return_value=GateAction.OPEN):
         trades = _run_stock_klines(
             klines,
             B1B2Config(),
@@ -123,7 +124,7 @@ def test_date_window_start_only_no_typeerror():
 def test_date_window_end_only_no_typeerror():
     """只设 end_date、start_date=None 时不应抛 TypeError。"""
     klines = _make_b2_klines()
-    with patch("modules.backtest.b1_b2_backtest.get_active_market_gate", return_value="OPEN"):
+    with patch("modules.active_market_value.apply_active_mv_gate", return_value=GateAction.OPEN):
         trades = _run_stock_klines(
             klines,
             B1B2Config(),
@@ -137,7 +138,7 @@ def test_date_window_end_only_no_typeerror():
 def test_date_window_both_none_no_typeerror():
     """start/end 都为 None(默认)不崩。"""
     klines = _make_b2_klines()
-    with patch("modules.backtest.b1_b2_backtest.get_active_market_gate", return_value="OPEN"):
+    with patch("modules.active_market_value.apply_active_mv_gate", return_value=GateAction.OPEN):
         trades = _run_stock_klines(
             klines,
             B1B2Config(),
@@ -151,7 +152,7 @@ def test_date_window_both_none_no_typeerror():
 def test_date_window_start_after_b2_excludes_entry():
     """start_date 设到 B2 之后 → 该 B2 不应被开仓(返回 trades 为空)。"""
     klines = _make_b2_klines()
-    with patch("modules.backtest.b1_b2_backtest.get_active_market_gate", return_value="OPEN"):
+    with patch("modules.active_market_value.apply_active_mv_gate", return_value=GateAction.OPEN):
         # B2 在 index=30 → 20260131;start 设到 20260201(之后),该 B2 被窗口过滤掉
         trades = _run_stock_klines(
             klines,
@@ -170,12 +171,13 @@ def test_date_window_start_after_b2_excludes_entry():
 def test_walkforward_happy_path_single_stock():
     """单股 walk-forward 至少能跑完不抛异常,返回 dict 结构。"""
     from modules.backtest import b1_b2_backtest as b2b
+    from modules import active_market_value as amv
 
     # 准备一个长 K 线序列(_make_b2_klines 固定 40 天,这里直接造一个 600 天的)
     long_klines = _make_klines(600)
 
     with patch.object(b2b, "get_kline_data", return_value=long_klines), \
-         patch.object(b2b, "get_active_market_gate", return_value="OPEN"):
+         patch.object(amv, "apply_active_mv_gate", return_value=GateAction.OPEN):
         result = b2b.run_b1_b2_walkforward(
             ts_codes=["TEST.SZ"],
             days=600,

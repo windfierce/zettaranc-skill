@@ -15,6 +15,7 @@ import csv
 import logging
 import os
 from dataclasses import dataclass
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -332,6 +333,62 @@ def format_active_market_value(point: ActiveMarketValuePoint) -> str:
         f"日环比: {point.pct_chg:+.2f}%\n"
         f"信号: {signal_text}"
     )
+
+
+class GateAction(Enum):
+    """活跃市值全局闸门动作（v4.3+ 统一闸门 API 返回值）。
+
+    - OPEN  - 允许开新仓
+    - WAIT  - 观望（不开新仓、不平仓）
+    - CLEAR - 强平（清仓所有/当前持仓）
+    """
+
+    OPEN = "OPEN"
+    WAIT = "WAIT"
+    CLEAR = "CLEAR"
+
+
+def apply_active_mv_gate(
+    date: str,
+    *,
+    enabled: bool = True,
+    duckdb_path: Optional[str] = None,
+    path: Optional[str] = None,
+) -> GateAction:
+    """活跃市值全局闸门统一入口（v4.3+ 替代各 engine 自己的 _gate 实现）。
+
+    规则：
+    - enabled=False：返回 OPEN（闸门关闭，不限制任何行为）
+    - enabled=True：调 get_active_market_gate 把字符串映射为 GateAction 枚举
+      - 任何映射失败/异常：返回 WAIT（保守：不开新仓、不强平），不抛异常阻断回测
+
+    Args:
+        date: YYYYMMDD 或 YYYY-MM-DD 格式交易日
+        enabled: 是否启用闸门；False 等价于"闸门不存在"
+        duckdb_path: 优先 DuckDB 路径
+        path: 备选 CSV 路径
+
+    Returns:
+        GateAction 枚举值（OPEN / WAIT / CLEAR），调用方按需解释
+
+    Note:
+        各 backtest engine（B1B2 / Portfolio）应在自己的循环里调本函数，
+        拿到 GateAction 后决定：WAIT 跳过开仓、CLEAR 触发自己的强平逻辑。
+        强平 scope（当前持仓 vs 所有持仓）由各 engine 自己决定，因为单股 vs 组合
+        上下文不同。
+    """
+    if not enabled:
+        return GateAction.OPEN
+    try:
+        gate_str = get_active_market_gate(date, duckdb_path=duckdb_path, path=path)
+    except Exception:  # noqa: BLE001
+        # 闸门查询失败时保守返回 WAIT,不让异常阻断回测主流程
+        return GateAction.WAIT
+    return {
+        "OPEN": GateAction.OPEN,
+        "WAIT": GateAction.WAIT,
+        "CLEAR": GateAction.CLEAR,
+    }.get(gate_str, GateAction.WAIT)
 
 
 def import_0amv_csv_to_duckdb(csv_path: str, duckdb_path: str) -> int:
