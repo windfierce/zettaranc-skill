@@ -27,7 +27,7 @@ import copy
 from dataclasses import fields, replace
 
 from modules.loop_engine import LoopConfig
-from modules.market_regime import MarketRegime
+from modules.market_regime import TrendRegime
 from .constants import (
     BACKTEST_BEAR_POSITION_PCT,
     BACKTEST_BULL_POSITION_PCT,
@@ -83,7 +83,7 @@ class DynamicConfigAdapter:
 
     Example:
         >>> adapter = DynamicConfigAdapter()
-        >>> config = adapter.get_config(MarketRegime.BULL)
+        >>> config = adapter.get_config(TrendRegime.BULL)
         >>> config.j_threshold
         18
         >>> config.position_pct
@@ -106,7 +106,7 @@ class DynamicConfigAdapter:
                 else:
                     self._regime_params[regime_key] = dict(params)
 
-    def get_config(self, regime: MarketRegime) -> LoopConfig:
+    def get_config(self, regime: TrendRegime) -> LoopConfig:
         """
         根据市场状态获取对应的 LoopConfig
 
@@ -148,7 +148,7 @@ class DynamicConfigAdapter:
         Returns:
             {状态名称: LoopConfig} 字典，包含 BULL / BEAR / SIDEWAYS 三种状态的完整配置
         """
-        return {regime_key: self.get_config(MarketRegime(regime_key)) for regime_key in self._regime_params}
+        return {regime_key: self.get_config(TrendRegime(regime_key)) for regime_key in self._regime_params}
 
     def get_regime_params(self, regime: str) -> dict:
         """
@@ -178,7 +178,7 @@ if __name__ == "__main__":
     print("\n【测试1】默认参数映射")
     adapter = DynamicConfigAdapter()
 
-    for regime in MarketRegime:
+    for regime in TrendRegime:
         config = adapter.get_config(regime)
         print(f"\n  {regime.value}:")
         print(f"    j_threshold     = {config.j_threshold}")
@@ -192,7 +192,7 @@ if __name__ == "__main__":
     print("\n【测试2】自定义 base_config")
     custom_base = LoopConfig(j_threshold=10, position_pct=0.25)
     adapter2 = DynamicConfigAdapter(base_config=custom_base)
-    bear_config = adapter2.get_config(MarketRegime.BEAR)
+    bear_config = adapter2.get_config(TrendRegime.BEAR)
     print(f"  BEAR j_threshold = {bear_config.j_threshold} (覆盖为5)")
     print(f"  BEAR position_pct = {bear_config.position_pct} (覆盖为0.15)")
     print(f"  BEAR stop_loss_method = {bear_config.stop_loss_method} (继承自base: entry_low)")
@@ -204,7 +204,7 @@ if __name__ == "__main__":
             "BULL": {"j_threshold": 25, "position_pct": 0.5},
         }
     )
-    bull_config = adapter3.get_config(MarketRegime.BULL)
+    bull_config = adapter3.get_config(TrendRegime.BULL)
     print(f"  BULL j_threshold = {bull_config.j_threshold} (自定义为25)")
     print(f"  BULL position_pct = {bull_config.position_pct} (自定义为0.5)")
     print(f"  BULL stop_loss_pct = {bull_config.stop_loss_pct} (保留默认映射-0.07)")
@@ -212,7 +212,7 @@ if __name__ == "__main__":
     # 测试4: set_regime_params 动态更新
     print("\n【测试4】set_regime_params 动态更新")
     adapter.set_regime_params("BULL", {"j_threshold": 20, "new_param": 999})
-    updated = adapter.get_config(MarketRegime.BULL)
+    updated = adapter.get_config(TrendRegime.BULL)
     print(f"  BULL j_threshold = {updated.j_threshold} (更新为20)")
 
     # 测试5: get_all_configs

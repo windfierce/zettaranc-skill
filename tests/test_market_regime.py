@@ -2,7 +2,7 @@
 modules/market_regime.py 单元测试
 
 覆盖：
-  1. MarketRegime 枚举值
+  1. TrendRegime 枚举值
   2. MarketRegimeClassifier 分类逻辑（BULL / BEAR / SIDEWAYS）
   3. 边界情况与辅助方法
 """
@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from modules.market_regime import MarketRegime, MarketRegimeClassifier
+from modules.market_regime import TrendRegime, MarketRegimeClassifier
 from modules.indicators.core import DailyData
 
 
@@ -109,38 +109,38 @@ def _make_sideways_klines(
     return klines
 
 
-# ──────────────────── 1. MarketRegime 枚举测试 ────────────────────
+# ──────────────────── 1. TrendRegime 枚举测试 ────────────────────
 
 
-class TestMarketRegimeEnum:
-    """MarketRegime 枚举基础测试"""
+class TestTrendRegimeEnum:
+    """TrendRegime 枚举基础测试"""
 
     def test_enum_values_exist(self):
         """三个枚举值必须存在"""
-        assert MarketRegime.BULL is not None
-        assert MarketRegime.BEAR is not None
-        assert MarketRegime.SIDEWAYS is not None
+        assert TrendRegime.BULL is not None
+        assert TrendRegime.BEAR is not None
+        assert TrendRegime.SIDEWAYS is not None
 
     def test_enum_values_are_strings(self):
         """枚举值应为对应字符串"""
-        assert MarketRegime.BULL.value == "BULL"
-        assert MarketRegime.BEAR.value == "BEAR"
-        assert MarketRegime.SIDEWAYS.value == "SIDEWAYS"
+        assert TrendRegime.BULL.value == "BULL"
+        assert TrendRegime.BEAR.value == "BEAR"
+        assert TrendRegime.SIDEWAYS.value == "SIDEWAYS"
 
     def test_enum_count(self):
         """枚举应恰好有 3 个成员"""
-        assert len(MarketRegime) == 3
+        assert len(TrendRegime) == 3
 
     def test_enum_membership(self):
         """通过值查找枚举成员"""
-        assert MarketRegime("BULL") is MarketRegime.BULL
-        assert MarketRegime("BEAR") is MarketRegime.BEAR
-        assert MarketRegime("SIDEWAYS") is MarketRegime.SIDEWAYS
+        assert TrendRegime("BULL") is TrendRegime.BULL
+        assert TrendRegime("BEAR") is TrendRegime.BEAR
+        assert TrendRegime("SIDEWAYS") is TrendRegime.SIDEWAYS
 
     def test_enum_invalid_value_raises(self):
         """不存在的值应抛出 ValueError"""
         with pytest.raises(ValueError):
-            MarketRegime("INVALID")
+            TrendRegime("INVALID")
 
 
 # ──────────────────── 2. 分类器核心逻辑测试 ────────────────────
@@ -156,14 +156,14 @@ class TestMarketRegimeClassifier:
         klines = _make_klines(200, trend=0.005, volatility=0.003)
         classifier = MarketRegimeClassifier()
         result = classifier.classify(klines)
-        assert result == MarketRegime.BULL
+        assert result == TrendRegime.BULL
 
     def test_moderate_uptrend_classified_as_bull(self):
         """中等上涨趋势 → BULL"""
         klines = _make_klines(200, trend=0.003, volatility=0.004)
         classifier = MarketRegimeClassifier()
         result = classifier.classify(klines)
-        assert result == MarketRegime.BULL
+        assert result == TrendRegime.BULL
 
     # --- 熊市场景 ---
 
@@ -172,14 +172,14 @@ class TestMarketRegimeClassifier:
         klines = _make_klines(200, trend=-0.005, volatility=0.003)
         classifier = MarketRegimeClassifier()
         result = classifier.classify(klines)
-        assert result == MarketRegime.BEAR
+        assert result == TrendRegime.BEAR
 
     def test_moderate_downtrend_classified_as_bear(self):
         """中等下跌趋势 → BEAR"""
         klines = _make_klines(200, trend=-0.003, volatility=0.004)
         classifier = MarketRegimeClassifier()
         result = classifier.classify(klines)
-        assert result == MarketRegime.BEAR
+        assert result == TrendRegime.BEAR
 
     # --- 震荡场景 ---
 
@@ -188,14 +188,14 @@ class TestMarketRegimeClassifier:
         klines = _make_sideways_klines(200, amplitude=0.01)
         classifier = MarketRegimeClassifier()
         result = classifier.classify(klines)
-        assert result == MarketRegime.SIDEWAYS
+        assert result == TrendRegime.SIDEWAYS
 
     def test_low_volatility_flat_classified_as_sideways(self):
         """低波动横盘 → SIDEWAYS"""
         klines = _make_sideways_klines(200, amplitude=0.005)
         classifier = MarketRegimeClassifier()
         result = classifier.classify(klines)
-        assert result == MarketRegime.SIDEWAYS
+        assert result == TrendRegime.SIDEWAYS
 
     # --- 阈值边界 ---
 
@@ -211,10 +211,10 @@ class TestMarketRegimeClassifier:
         result_strict = classifier_strict.classify(klines)
 
         # 默认阈值下应判定为 BULL，严格阈值下不应再是 BULL
-        assert result_default == MarketRegime.BULL
-        assert result_strict != MarketRegime.BULL
+        assert result_default == TrendRegime.BULL
+        assert result_strict != TrendRegime.BULL
         # 结果应该是 SIDEWAYS 或 BEAR
-        assert result_strict in (MarketRegime.SIDEWAYS, MarketRegime.BEAR)
+        assert result_strict in (TrendRegime.SIDEWAYS, TrendRegime.BEAR)
 
     def test_custom_thresholds_make_classification_looser(self):
         """自定义更宽松的阈值应更容易判定为 BULL"""
@@ -225,7 +225,7 @@ class TestMarketRegimeClassifier:
         result = classifier_loose.classify(klines)
 
         # 宽松阈值下，综合得分 > -0.5 就判 BULL
-        assert result == MarketRegime.BULL
+        assert result == TrendRegime.BULL
 
     # --- classify_date ---
 
@@ -235,14 +235,14 @@ class TestMarketRegimeClassifier:
         classifier = MarketRegimeClassifier()
         # 在索引 120 处分类（有足够历史数据）
         result = classifier.classify_date(klines, 120)
-        assert isinstance(result, MarketRegime)
+        assert isinstance(result, TrendRegime)
 
     def test_classify_date_returns_market_regime(self):
         """classify_date 返回值类型正确"""
         klines = _make_klines(200, trend=-0.005, volatility=0.003)
         classifier = MarketRegimeClassifier()
         result = classifier.classify_date(klines, 150)
-        assert result in (MarketRegime.BULL, MarketRegime.BEAR, MarketRegime.SIDEWAYS)
+        assert result in (TrendRegime.BULL, TrendRegime.BEAR, TrendRegime.SIDEWAYS)
 
 
 # ──────────────────── 3. 辅助方法测试 ────────────────────
@@ -305,7 +305,7 @@ class TestClassifierHelpers:
         assert len(result) > 0
         for idx, regime in result.items():
             assert isinstance(idx, int)
-            assert isinstance(regime, MarketRegime)
+            assert isinstance(regime, TrendRegime)
 
     def test_precompute_all_start_idx(self):
         """precompute_all 应从 start_idx 开始"""
@@ -322,7 +322,7 @@ class TestClassifierHelpers:
         classifier = MarketRegimeClassifier()
         result = classifier.precompute_all(klines, start_idx=120)
 
-        bull_count = sum(1 for r in result.values() if r == MarketRegime.BULL)
+        bull_count = sum(1 for r in result.values() if r == TrendRegime.BULL)
         total = len(result)
         # 强上涨趋势下，大部分应该是 BULL
         assert bull_count / total > 0.5
@@ -342,7 +342,7 @@ class TestClassifierHelpers:
             }
         )
         result = classifier_ma_only.classify(klines)
-        assert isinstance(result, MarketRegime)
+        assert isinstance(result, TrendRegime)
 
     def test_default_weights_sum_to_one(self):
         """默认权重之和应为 1.0"""
@@ -363,21 +363,21 @@ class TestEdgeCases:
         klines = _make_klines(10, trend=0.005)
         classifier = MarketRegimeClassifier()
         result = classifier.classify(klines)
-        assert isinstance(result, MarketRegime)
+        assert isinstance(result, TrendRegime)
 
     def test_single_kline_does_not_crash(self):
         """单根 K 线不应崩溃"""
         klines = _make_klines(1, trend=0.0)
         classifier = MarketRegimeClassifier()
         result = classifier.classify(klines)
-        assert isinstance(result, MarketRegime)
+        assert isinstance(result, TrendRegime)
 
     def test_two_klines_does_not_crash(self):
         """两根 K 线不应崩溃"""
         klines = _make_klines(2, trend=0.005)
         classifier = MarketRegimeClassifier()
         result = classifier.classify(klines)
-        assert isinstance(result, MarketRegime)
+        assert isinstance(result, TrendRegime)
 
     def test_zero_volatility_flat_line(self):
         """零波动率（价格不变）不应崩溃"""
@@ -385,7 +385,7 @@ class TestEdgeCases:
         classifier = MarketRegimeClassifier()
         result = classifier.classify(klines)
         # 价格完全不变，应为 SIDEWAYS
-        assert result == MarketRegime.SIDEWAYS
+        assert result == TrendRegime.SIDEWAYS
 
     def test_precompute_all_with_short_data(self):
         """短数据的 precompute_all 应返回空字典"""
@@ -411,7 +411,7 @@ class TestEdgeCases:
         classifier = MarketRegimeClassifier(bear_threshold=-0.3)
         klines = _make_sideways_klines(200, amplitude=0.01)
         result = classifier.classify(klines)
-        assert result != MarketRegime.BEAR
+        assert result != TrendRegime.BEAR
 
     def test_all_three_regimes_possible(self):
         """确认三种状态在不同数据下都能被分类出来"""
@@ -429,6 +429,6 @@ class TestEdgeCases:
         sideways_klines = _make_sideways_klines(200, amplitude=0.01)
         results.add(MarketRegimeClassifier().classify(sideways_klines))
 
-        assert MarketRegime.BULL in results
-        assert MarketRegime.BEAR in results
-        assert MarketRegime.SIDEWAYS in results
+        assert TrendRegime.BULL in results
+        assert TrendRegime.BEAR in results
+        assert TrendRegime.SIDEWAYS in results

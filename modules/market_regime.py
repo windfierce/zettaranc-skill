@@ -30,8 +30,13 @@ from .constants import (
 )
 
 
-class MarketRegime(Enum):
-    """市场状态枚举"""
+class TrendRegime(Enum):
+    """趋势方向枚举（v4.3.0 由 MarketRegime 改名,与 core.market_context.MarketRegime 解耦）
+
+    - BULL    = "BULL"      多头趋势
+    - BEAR    = "BEAR"      空头趋势
+    - SIDEWAYS = "SIDEWAYS"  震荡
+    """
 
     BULL = "BULL"
     BEAR = "BEAR"
@@ -53,6 +58,7 @@ class MarketRegimeClassifier:
     市场状态分类器
 
     基于大盘指数K线的五因子模型，输出 BULL / BEAR / SIDEWAYS 三态分类。
+    返回 TrendRegime 枚举值（与 core.market_context.MarketRegime 是不同概念：前者是趋势方向，后者是仓位管理用的强/弱/震荡档位）。
     支持对最新状态分类、对历史某日分类、以及批量预计算。
 
     Args:
@@ -74,7 +80,7 @@ class MarketRegimeClassifier:
 
     # ──────────────────── 公开接口 ────────────────────
 
-    def classify(self, klines: list[DailyData]) -> MarketRegime:
+    def classify(self, klines: list[DailyData]) -> TrendRegime:
         """
         对最新状态进行分类
 
@@ -82,11 +88,11 @@ class MarketRegimeClassifier:
             klines: 大盘指数K线数据列表，按日期升序排列（最新在最后）
 
         Returns:
-            MarketRegime 枚举值
+            TrendRegime 枚举值
         """
         return self.classify_date(klines, len(klines) - 1)
 
-    def classify_date(self, klines: list[DailyData], date_idx: int) -> MarketRegime:
+    def classify_date(self, klines: list[DailyData], date_idx: int) -> TrendRegime:
         """
         对历史某日进行分类
 
@@ -95,17 +101,17 @@ class MarketRegimeClassifier:
             date_idx: 要分类的日期在列表中的索引位置
 
         Returns:
-            MarketRegime 枚举值
+            TrendRegime 枚举值
         """
         score = self._compute_score(klines, date_idx)
         if score > self.bull_threshold:
-            return MarketRegime.BULL
+            return TrendRegime.BULL
         elif score < self.bear_threshold:
-            return MarketRegime.BEAR
+            return TrendRegime.BEAR
         else:
-            return MarketRegime.SIDEWAYS
+            return TrendRegime.SIDEWAYS
 
-    def precompute_all(self, klines: list[DailyData], start_idx: int = 120) -> dict[int, MarketRegime]:
+    def precompute_all(self, klines: list[DailyData], start_idx: int = 120) -> dict[int, TrendRegime]:
         """
         预计算所有日期的市场状态（用于历史回测）
 
@@ -114,9 +120,9 @@ class MarketRegimeClassifier:
             start_idx: 起始索引（需要足够历史数据，默认 120）
 
         Returns:
-            {日期索引: MarketRegime} 字典
+            {日期索引: TrendRegime} 字典
         """
-        result: dict[int, MarketRegime] = {}
+        result: dict[int, TrendRegime] = {}
         for i in range(start_idx, len(klines)):
             result[i] = self.classify_date(klines, i)
         return result

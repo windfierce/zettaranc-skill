@@ -22,7 +22,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass, field
 
-from modules.market_regime import MarketRegime
+from modules.market_regime import TrendRegime
 from modules.core.errors import ErrorCode, ZettarancError
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class PositionManager:
         entry_price: float,
         stop_loss_price: float,
         current_equity: float,
-        regime: MarketRegime = MarketRegime.SIDEWAYS,
+        regime: TrendRegime = TrendRegime.SIDEWAYS,
         atr: float | None = None,
     ) -> int:
         """计算买入股数（A 股整手）
@@ -388,7 +388,7 @@ if __name__ == "__main__":
         entry_price=50.0,
         stop_loss_price=47.0,  # 6% 止损
         current_equity=1_000_000,
-        regime=MarketRegime.SIDEWAYS,
+        regime=TrendRegime.SIDEWAYS,
     )
     print(f"建议买入: {shares} 股，金额 {shares * 50:.0f}")
 
@@ -399,7 +399,7 @@ if __name__ == "__main__":
         entry_price=20.0,
         stop_loss_price=18.5,  # 7.5% 止损
         current_equity=1_000_000,
-        regime=MarketRegime.BULL,
+        regime=TrendRegime.BULL,
         atr=1.0,  # ATR/price = 5%，低于 target_vol 15%
     )
     print(f"建议买入: {shares} 股，金额 {shares * 20:.0f}")
@@ -411,7 +411,7 @@ if __name__ == "__main__":
         entry_price=40.0,
         stop_loss_price=38.0,
         current_equity=1_000_000,
-        regime=MarketRegime.BEAR,
+        regime=TrendRegime.BEAR,
     )
     print(f"建议买入: {shares} 股，金额 {shares * 40:.0f}")
 
