@@ -371,14 +371,14 @@ def detect_buy_exhaustion(klines: list[DailyData], index: int) -> StrategySignal
     return StrategySignal(
         ts_code=today.ts_code,
         trade_date=today.trade_date,
-        strategy=StrategyType.WATCH,
+        strategy=StrategyType.S1,
         confidence=0.65,
         description="买盘枯竭：连续3天缩量小阳线，上涨动能不足",
         details={
             "trend_up_pct": round(up_pct * 100, 2),
             "last_3_days_vol": [klines[i].vol for i in range(index - 2, index + 1)],
         },
-        action="WATCH",
+        action="SELL",
         priority=Priority.OBSERVE,
     )
 

@@ -566,9 +566,9 @@ class TestDetectBuyExhaustion:
 
         signal = detect_buy_exhaustion(klines, len(klines) - 1)
         assert signal is not None
-        assert signal.strategy == StrategyType.WATCH
+        assert signal.strategy == StrategyType.S1
         assert "买盘枯竭" in signal.description
-        assert signal.action == "WATCH"
+        assert signal.action == "SELL"
 
     def test_not_small_yang(self):
         """非小阳线（实体>=1%）不触发"""

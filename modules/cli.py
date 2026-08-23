@@ -506,6 +506,35 @@ def cmd_sync(args) -> None:
             success = sum(1 for v in results.values() if v > 0)
             print(f"批量同步完成，成功 {success}/{len(results)}")
 
+    elif action == "index":
+        from modules.index_sync import sync_indices_to_duckdb
+
+        duckdb_path = args.duckdb or os.getenv("DUCKDB_PATH", "data/market.duckdb")
+        codes = None
+        if args.codes:
+            codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+
+        print(f"正在通过 hithink 同步指数到 DuckDB: {duckdb_path}")
+        result = sync_indices_to_duckdb(
+            duckdb_path=duckdb_path,
+            index_codes=codes,
+            start_date=args.start,
+            end_date=args.end,
+        )
+        print(f"同步完成，共写入 {result['total_rows']} 条")
+        for code, info in result["details"].items():
+            print(f"  {code}: {info['status']} ({info['rows']} 条)")
+
+    elif action == "0amv":
+        from modules.active_market_value import import_0amv_csv_to_duckdb
+
+        duckdb_path = args.duckdb or os.getenv("DUCKDB_PATH", "data/market.duckdb")
+        csv_path = args.csv or "data/0amv_active_market_value.csv"
+
+        print(f"正在导入 0AMV 活跃市值到 DuckDB: {duckdb_path}")
+        count = import_0amv_csv_to_duckdb(csv_path=csv_path, duckdb_path=duckdb_path)
+        print(f"导入完成，共 {count} 条")
+
     elif action == "status":
         syncer = DataSyncer(datasource=get_datasource("tushare"))
         status = syncer.get_sync_status()
@@ -733,6 +762,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync_factor.add_argument("ts_code", nargs="?", help="股票代码（不传 = 全市场）")
     p_sync_factor.add_argument("--days", type=int, default=365, help="同步天数")
 
+    p_sync_index = p_sync_sub.add_parser("index", help="通过 hithink 同步主要指数日线到 DuckDB")
+    p_sync_index.add_argument("--duckdb", default=None, help="DuckDB 数据库路径（默认读 DUCKDB_PATH 或 data/market.duckdb）")
+    p_sync_index.add_argument("--start", default="20160101", help="起始日期 YYYYMMDD")
+    p_sync_index.add_argument("--end", default=None, help="结束日期 YYYYMMDD，默认今天")
+    p_sync_index.add_argument("--codes", default=None, help="指数代码，逗号分隔；默认 6 个主要指数")
+
+    p_sync_0amv = p_sync_sub.add_parser("0amv", help="把 0AMV 活跃市值 CSV 导入 DuckDB")
+    p_sync_0amv.add_argument("--duckdb", default=None, help="DuckDB 数据库路径（默认读 DUCKDB_PATH 或 data/market.duckdb）")
+    p_sync_0amv.add_argument("--csv", default=None, help="0AMV CSV 路径（默认 data/0amv_active_market_value.csv）")
+
     # ── track（自我改进系统 - 跟踪池管理）──
     p_track = subparsers.add_parser("track", help="自我改进系统 - 跟踪池管理")
     p_track.add_argument("track_action", choices=["add", "remove", "list", "info", "status", "stats"], help="操作")
@@ -769,6 +808,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt_portfolio.add_argument("--mode", choices=["shaofu", "multi"], default="shaofu", help="回测模式")
     p_bt_portfolio.add_argument("--json", action="store_true", help="JSON输出")
 
+    # B1观察+B2确认策略回测（与 cli_commands.cmd_backtest 对齐）
+    p_bt_b2 = p_bt_sub.add_parser("b2-confirm", help="B1观察+B2确认+次日开盘回测")
+    p_bt_b2.add_argument("codes", nargs="?", help="股票代码，逗号分隔；单股也可用 ts_code 位置")
+    p_bt_b2.add_argument("--days", type=int, default=500, help="回测天数")
+    p_bt_b2.add_argument("--b2-min-pct", type=float, default=4.0, help="B2 涨幅阈值")
+    p_bt_b2.add_argument("--b2-min-vol", type=float, default=2.0, help="B2 量比阈值")
+    p_bt_b2.add_argument("--b2-j-max", type=float, default=55.0, help="B2 当日 J 值上限")
+    p_bt_b2.add_argument("--b1-j-threshold", type=float, default=-10.0, help="B1 J 值阈值")
+    p_bt_b2.add_argument("--observe-min", type=int, default=3, help="观察窗口起点")
+    p_bt_b2.add_argument("--observe-max", type=int, default=5, help="观察窗口终点")
+    p_bt_b2.add_argument("--max-gap-open-pct", type=float, default=5.0, help="次日高开过滤")
+    p_bt_b2.add_argument("--stop-loss-pct", type=float, default=-0.05, help="止损比例")
+    p_bt_b2.add_argument("--bbi-days", type=int, default=2, help="BBI 连续跌破天数")
+    p_bt_b2.add_argument("--min-hold", type=int, default=2, help="最少持仓天数")
+    p_bt_b2.add_argument("--walk-forward", action="store_true", help="运行 Walk-forward 验证")
+    p_bt_b2.add_argument("--folds", type=int, default=4, help="Walk-forward 折数")
+    p_bt_b2.add_argument("--window", type=int, default=120, help="Walk-forward 窗口天数")
+    p_bt_b2.add_argument("--active-mv-gate", action="store_true", help="启用活跃市值全局闸门")
+    p_bt_b2.add_argument("--active-mv-duckdb", default=None, help="活跃市值 DuckDB 路径")
+    p_bt_b2.add_argument("--active-mv-path", default=None, help="活跃市值 CSV 路径")
+    p_bt_b2.add_argument("--json", action="store_true", help="JSON输出")
+
     # ── trade（add / list / review / stats）──
     # 改为 subparser 模式：dest="trade_sub" 与 cli_commands.cmd_trade 里 getattr(args, "trade_sub", ...) 对齐
     p_trade = subparsers.add_parser("trade", help="交易记录管理")
@@ -792,6 +853,16 @@ def build_parser() -> argparse.ArgumentParser:
     # ── daily ──
     p_daily = subparsers.add_parser("daily", help="每日五步工作流")
     p_daily.add_argument("--json", action="store_true", help="JSON输出")
+
+    # ── market（市场择时）──
+    p_market = subparsers.add_parser("market", help="市场择时指标")
+    p_market_sub = p_market.add_subparsers(dest="market_sub", required=True)
+    p_market_timing = p_market_sub.add_parser("timing", help="计算市场择时指标")
+    p_market_timing.add_argument("--date", default=None, help="交易日 YYYYMMDD，默认最新")
+    p_market_timing.add_argument("--index", default="000001.SH", help="大盘指数代码")
+    p_market_timing.add_argument("--days", type=int, default=120, help="指数 K 线回溯天数")
+    p_market_timing.add_argument("--duckdb", default=None, help="DuckDB 全市场数据库路径")
+    p_market_timing.add_argument("--json", action="store_true", help="JSON输出")
 
     # ── monitor ──
     p_monitor = subparsers.add_parser("monitor", help="自选股主动预警与扫描推送")
@@ -856,6 +927,7 @@ def main() -> None:
         cmd_backtest,
         cmd_trade,
         cmd_daily,
+        cmd_market_timing,
         cmd_monitor,
         cmd_simulate,
         cmd_verify_v10,
@@ -872,6 +944,7 @@ def main() -> None:
         "backtest": cmd_backtest,
         "trade": cmd_trade,
         "daily": cmd_daily,
+        "market": cmd_market_timing,
         "track": cmd_track,
         "self-optimize": cmd_self_optimize,
         "monitor": cmd_monitor,

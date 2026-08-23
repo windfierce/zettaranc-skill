@@ -16,7 +16,7 @@
 - **Web 看板**：`api/`（FastAPI 后端）+ `frontend/`（React + Vite + Tailwind 前端），可选
 - **语料基础**：约 467 篇直播/付费课整理文章（~200 万字）+ 13 个 ztalk 视频 transcript（~12.7 万字）+ 9 篇交易心理系列（~3.3 万字）+ 后续新增文章
 - **许可证**：MIT
-- **当前版本**：**v4.1.0**（以 `pyproject.toml` 与 `docs/CHANGELOG.md` 为准）
+- **当前版本**：**v4.2.0**（以 `pyproject.toml` 与 `docs/CHANGELOG.md` 为准）
 
 ### 双模式架构
 
@@ -30,14 +30,15 @@
 `modules/datasource.py` 的 `CompositeDataSource` 在 `auto` 模式下按以下优先级选源（token 感知）：
 
 ```
-Indevs（配置 INDEVS_API_KEY 时最优先，v3.8.1 新增）
-  → Tushare Pro（配置 TUSHARE_TOKEN 时）
+hithink（同花顺官方金融数据服务，配置 HITHINK_FINANCE_API_KEY 时最优先，v4.2.0 新增）
+  → Indevs（配置 INDEVS_API_KEY 时，v3.8.1 新增）
+  → Tushare Pro（JNB 模式配置 TUSHARE_TOKEN 时）
   → a-stock-data（免费源，v4.1.0 新增，零配置时的默认）
   → tushare-data-bridge（HTTP 缓存代理，TUSHARE_BRIDGE_ENABLED=auto/always）
   → 本地 SQLite（data/stock_data.db，离线兜底）
 ```
 
-其中 **a-stock-data**（`modules/a_stock_data_client.py`）是 v4.1.0 新增的免费数据源：无需任何 API Key，封装腾讯财经 / 百度股市通 / 东方财富 / 通达信（mootdx）公开接口，零配置即可获取实时行情与 K 线。
+其中 **hithink**（`modules/hithink_client.py`）是 v4.2.0 新增的同花顺官方数据源：REST API（https://fuyao.aicubes.cn，`X-api-key` 鉴权），提供日 K（个股/指数）、实时快照+估值合并、标的目录、交易日历；资金流向/技术因子不提供。其中 **a-stock-data**（`modules/a_stock_data_client.py`）是 v4.1.0 新增的免费数据源：无需任何 API Key，封装腾讯财经 / 百度股市通 / 东方财富 / 通达信（mootdx）公开接口，零配置即可获取实时行情与 K 线。
 
 自 **v3.8.2** 起，K 线读取统一走 **DB 优先** 策略：先查 `daily_kline` 表，DB 没有时才调 API 并写回 DB 缓存。即使处于降级路径，工具也**不会编造价格或信号**，而是明确告知当前数据状态。
 
@@ -53,6 +54,7 @@ Python 数据层（modules/）              LLM 角色层（SKILL.md）
 │                         bridge HTTP 客户端  └─ 诚实边界
 ├─ indevs_client.py      Indevs 数据客户端（v3.8.1）
 ├─ a_stock_data_client.py 免费数据源客户端（v4.1.0，腾讯/百度/东财/通达信）
+├─ hithink_client.py      同花顺官方数据源客户端（v4.2.0，hithink-finance REST）
 ├─ database.py           SQLite 管理（15 张表）
 ├─ data_sync.py          兼容 shim
 ├─ data_sync/            数据同步子包
@@ -244,7 +246,7 @@ references/research/（11 份调研提炼文件）
 | 接口协议 | CLI（`zt` 入口）、可选 FastAPI Web 服务（`zt-web`） |
 | 前端看板 | React 19 + Vite 8 + TypeScript 6 + Tailwind CSS 4 + ECharts 6 |
 | 状态管理 | Zustand 5 + TanStack React Query 5 + axios + react-router-dom 7 |
-| 测试框架 | `pytest`（实测 **1383 用例 passed，16 skipped**，100 个 .py 文件 + 1 个 .md） |
+| 测试框架 | `pytest`（实测 **1443 用例 passed，15 skipped**，102 个 .py 文件） |
 | 代码质量 | `ruff`（lint + format）、`mypy`、pre-commit |
 | 视频下载 | `yt-dlp`（语料采集，可选） |
 | 语音转写 | `faster-whisper`（语料采集，可选） |
@@ -285,6 +287,10 @@ TUSHARE_API_URL=                    # 中转 API 地址（JNB 模式必填）
 # Indevs Tushare Replay API（可选，配置后数据同步优先走该源）
 # INDEVS_API_KEY=your_api_key
 # INDEVS_API_URL=https://ai-tool.indevs.in/tushare/pro
+
+# 同花顺金融数据服务 hithink-finance（可选，v4.2.0；配置后 auto 模式最优先）
+# HITHINK_FINANCE_API_KEY=sk-fuyao-xxxx
+# HITHINK_FINANCE_API_URL=https://fuyao.aicubes.cn
 
 DATA_DIR=data
 DB_PATH=data/stock_data.db
@@ -327,7 +333,7 @@ zettaranc-skill/
 │   └── main.py    # 入口 + start_web() 函数
 ├── frontend/      # React 前端看板（可选）
 ├── knowledge/     # 29 篇顶层交易体系知识文档 + 3 个子目录文档
-├── tests/         # pytest 测试（75 个 .py 文件 + 1 个 .md）
+├── tests/         # pytest 测试（102 个 .py 文件）
 ├── scripts/       # 薄壳工具脚本（业务逻辑在 modules/）
 ├── corpus/        # 语料采集与质检工具
 ├── rules/         # 意图规则与决策框架
@@ -396,7 +402,7 @@ zt verify v1.0 --limit 50 --days 300 --walk-forward
 ### 运行测试
 
 ```bash
-# 全部测试（当前实测：1383 passed, 16 skipped，约 30s）
+# 全部测试（当前实测：1443 passed, 15 skipped，约 40s）
 python -m pytest tests/ -v
 
 # 单文件测试
@@ -577,6 +583,7 @@ mypy modules/ --ignore-missing-imports
 **注意**：技术债清理、内部重构属于 PATCH，不是 MINOR。避免版本号增长过快。
 
 **近期版本脉络**（详见 `docs/CHANGELOG.md`）：
+- **v4.2.0**：同花顺官方数据源接入（hithink-finance，配置 Key 即最优先）
 - **v4.1.0**：免费数据源集成（a-stock-data，token 感知优先级）
 - **v3.10.4**：技术债与文档收尾（版本号五处统一、USER_GUIDE 追平、性能优化 6.3x/2.4x、`core/errors.py` 统一错误码）
 - **v3.10.3**：组合回测策略权重按市场环境动态调整 + 各策略贡献度统计（`StrategyStats`）
@@ -607,7 +614,7 @@ mypy modules/ --ignore-missing-imports
 - **数据工厂**：`make_kline_row()`、`make_daily_data()`、`generate_uptrend_klines()`、`generate_downtrend_klines()`、`generate_b1_scenario()`、`write_klines_to_db()`、`write_stock_basic()` 等
 - **数据库隔离**：所有测试使用临时 SQLite 文件，互不干扰
 
-### 测试覆盖范围（当前 75 个 .py 文件 + 1 个 .md）
+### 测试覆盖范围（当前 102 个 .py 文件）
 
 | 测试文件 | 覆盖范围 |
 |---------|---------|
@@ -626,6 +633,7 @@ mypy modules/ --ignore-missing-imports
 | `test_core.py` / `test_errors.py` | 公共模块（metrics/walk_forward/market_context/net/errors 统一错误码） |
 | `test_market_regime.py` | 市场状态机 |
 | `test_data_e2e.py` / `test_data_sync.py` / `test_data_sync_extensions.py` / `test_datasource.py` / `test_indicator_cache.py` / `test_indevs_datasource.py` | 数据层端到端、同步、数据源、指标缓存、Indevs 数据源 |
+| `test_hithink_client.py` | 同花顺官方数据源客户端与 CompositeDataSource 注册（信封/重试/K 线映射/目录分页/优先级，全 mock） |
 | `test_trade_manager.py` / `test_trade_parser.py` | 交易记录 CRUD、口语化解析 |
 | `test_intent_router.py` | 意图路由规则匹配 |
 | `test_quality_check.py` | SKILL.md 12 项质量检查 |
@@ -645,7 +653,7 @@ mypy modules/ --ignore-missing-imports
 
 ```bash
 $ python -m pytest tests/ -v
-# 当前实测结果：1383 passed, 16 skipped（约 30 秒）
+# 当前实测结果：1443 passed, 15 skipped（约 40 秒）
 ```
 
 ---

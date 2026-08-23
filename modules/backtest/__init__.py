@@ -27,6 +27,13 @@ from .portfolio import (
     EntrySignal,
 )
 
+from .b1_b2_backtest import (
+    B1B2PoolResult,
+    run_b1_b2_single,
+    run_b1_b2_pool,
+    run_b1_b2_walkforward,
+)
+
 __all__ = [
     # single
     "Trade",
@@ -45,4 +52,9 @@ __all__ = [
     "Position",
     "PortfolioBacktestResult",
     "PortfolioBacktestEngine",
+    # b1+b2
+    "B1B2PoolResult",
+    "run_b1_b2_single",
+    "run_b1_b2_pool",
+    "run_b1_b2_walkforward",
 ]

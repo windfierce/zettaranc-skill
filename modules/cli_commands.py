@@ -171,6 +171,49 @@ def _print_shaofu_summary(ts_code: str, dict_result: dict) -> None:
             )
 
 
+def _b1_b2_pool_to_dict(pool) -> dict:
+    """将 B1B2PoolResult 转换为可序列化字典。"""
+    return {
+        "ts_count": len(pool.ts_codes),
+        "total_trades": pool.total_trades,
+        "win_rate": round(pool.win_rate, 4),
+        "avg_pnl": round(pool.avg_pnl, 4),
+        "profit_factor": round(pool.profit_factor, 4) if pool.profit_factor else None,
+        "stocks_with_trades": pool.stocks_with_trades,
+        "avg_stock_return": round(pool.avg_stock_return, 4),
+        "median_stock_return": round(pool.median_stock_return, 4),
+        "per_stock": [
+            {
+                "ts_code": r.ts_code,
+                "total_trades": r.total_trades,
+                "win_rate": round(r.win_rate, 4),
+                "total_return": round(r.total_return, 4),
+            }
+            for r in pool.results
+            if r.total_trades > 0
+        ],
+    }
+
+
+def _print_b1_b2_pool_summary(pool) -> None:
+    """人类可读的 B1+B2 池级回测摘要。"""
+    print(f"\n{'=' * 60}")
+    print("B1观察 + B2确认策略 · 池级回测")
+    print(f"{'=' * 60}")
+    print(f"股票数量:       {len(pool.ts_codes)}")
+    print(f"有交易股票数:   {pool.stocks_with_trades}")
+    print(f"总交易次数:     {pool.total_trades}")
+    print(f"胜率:           {pool.win_rate:.1%}")
+    print(f"平均单笔盈亏:   {pool.avg_pnl:+.2f}%")
+    print(f"盈亏比:         {pool.profit_factor:.2f}")
+    print(f"有交易股票平均收益: {pool.avg_stock_return:+.2%}")
+    print(f"有交易股票中位收益: {pool.median_stock_return:+.2%}")
+    print(f"{'=' * 60}")
+    for r in pool.results:
+        if r.total_trades > 0:
+            print(f"  {r.ts_code}: {r.total_trades}笔 胜率{r.win_rate:.0%} 收益{r.total_return:+.2%}")
+
+
 def cmd_backtest(args) -> None:
     """
     回测命令
@@ -179,18 +222,22 @@ def cmd_backtest(args) -> None:
         shaofu   <ts_code>  [--days N] [--json]          少妇战法单股回测
         multi    <ts_code>  [--days N] [--json]          多策略融合回测
         portfolio <c1,c2,..> [--days N] [--json]         组合回测
+        b2-confirm <ts_code>|<codes> [--days N] [--json] B1观察+B2确认次日开盘回测
 
     示例：
         zt backtest shaofu 600487.SH --days 250 --json
         zt backtest multi 600487.SH --strategy b1,b2 --days 120 --json
         zt backtest portfolio 600487.SH,601318.SH --days 120 --json
+        zt backtest b2-confirm 600487.SH --days 500 --json
+        zt backtest b2-confirm 000001.SZ,000002.SZ --days 500 --b2-min-pct 6 --json
+        zt backtest b2-confirm 000001.SZ,000002.SZ --days 800 --walk-forward --folds 4
     """
     sub = getattr(args, "backtest_sub", None)
     use_json = getattr(args, "json", False)
     days = getattr(args, "days", 250)
 
     if not sub:
-        _error("请指定回测子命令: shaofu / multi / portfolio")
+        _error("请指定回测子命令: shaofu / multi / portfolio / b2-confirm")
 
     ts_code = getattr(args, "ts_code", None)
 
@@ -280,8 +327,153 @@ def cmd_backtest(args) -> None:
                     status = "有交易" if r.total_trades > 0 else "无交易"
                     print(f"  {r.ts_code}: {status} {r.total_trades}笔 胜率{r.win_rate:.0%} 收益{r.total_return:+.2%}")
 
+    # ── b2-confirm: B1观察+B2确认+次日开盘回测 ──
+    elif sub == "b2-confirm":
+        from modules.strategies.b1_b2_confirm import B1B2Config
+        from modules.backtest.b1_b2_backtest import (
+            run_b1_b2_single,
+            run_b1_b2_pool,
+            run_b1_b2_walkforward,
+        )
+        from modules.loop_engine import LoopConfig
+
+        codes_str = getattr(args, "codes", None)
+        if codes_str:
+            ts_codes = [c.strip() for c in codes_str.split(",") if c.strip()]
+        elif ts_code:
+            ts_codes = [ts_code]
+        else:
+            _error("请指定股票代码，如: backtest b2-confirm 600487.SH 或 b2-confirm 000001.SZ,000002.SZ")
+
+        b2_j_max = getattr(args, "b2_j_max", None)
+        cfg = B1B2Config(
+            b1_j_threshold=getattr(args, "b1_j_threshold", -10.0),
+            observe_min=getattr(args, "observe_min", 3),
+            observe_max=getattr(args, "observe_max", 5),
+            b2_min_pct=getattr(args, "b2_min_pct", 4.0),
+            b2_min_vol_ratio=getattr(args, "b2_min_vol", 2.0),
+            b2_j_max=b2_j_max,
+            max_gap_open_pct=getattr(args, "max_gap_open_pct", 5.0),
+        )
+        lc = LoopConfig(
+            stop_loss_pct=getattr(args, "stop_loss_pct", -0.05),
+            bbi_break_days=getattr(args, "bbi_days", 2),
+            min_holding_days=getattr(args, "min_hold", 2),
+            position_pct=1.0,
+        )
+        active_mv_enabled = getattr(args, "active_mv_gate", False)
+        active_mv_duckdb = getattr(args, "active_mv_duckdb", None)
+        active_mv_path = getattr(args, "active_mv_path", None)
+
+        if getattr(args, "walk_forward", False):
+            wf = run_b1_b2_walkforward(
+                ts_codes,
+                days=days,
+                folds=getattr(args, "folds", 4),
+                window=getattr(args, "window", 120),
+                config=cfg,
+                loop_config=lc,
+                active_mv_enabled=active_mv_enabled,
+                active_mv_duckdb_path=active_mv_duckdb,
+                active_mv_path=active_mv_path,
+            )
+            if use_json:
+                _json_output(wf)
+            else:
+                print(f"\n{'=' * 60}")
+                print("B1观察 + B2确认 · Walk-forward 样本外验证")
+                print(f"{'=' * 60}")
+                for fold in wf.get("folds", []):
+                    pf = fold.get("profit_factor")
+                    print(
+                        f"Fold {fold['fold']}  {fold['range']}  "
+                        f"交易{fold['total_trades']}笔 胜率{fold['win_rate']:.1%} "
+                        f"平均单笔{fold['avg_pnl']:+.2f}% 盈亏比{pf if pf is not None else '-'}"
+                    )
+            return
+
+        if len(ts_codes) == 1:
+            result = run_b1_b2_single(
+                ts_codes[0],
+                days=days,
+                config=cfg,
+                loop_config=lc,
+                active_mv_enabled=active_mv_enabled,
+                active_mv_duckdb_path=active_mv_duckdb,
+                active_mv_path=active_mv_path,
+            )
+            if use_json:
+                _json_output(
+                    {
+                        "ts_code": result.ts_code,
+                        "total_trades": result.total_trades,
+                        "win_rate": round(result.win_rate, 4),
+                        "avg_pnl": round(result.avg_pnl, 4),
+                        "profit_factor": round(result.profit_factor, 4) if result.profit_factor else None,
+                        "total_return": round(result.total_return, 4),
+                        "max_drawdown": round(result.max_drawdown, 4),
+                        "sharpe_ratio": round(result.sharpe_ratio, 4),
+                        "trades": [
+                            {
+                                "entry_date": t.entry_date,
+                                "exit_date": t.exit_date,
+                                "entry_price": round(t.entry_price, 2),
+                                "exit_price": round(t.exit_price, 2),
+                                "pnl_pct": round(t.pnl_pct, 2),
+                                "exit_reason": t.exit_reason,
+                            }
+                            for t in result.trades
+                        ],
+                    }
+                )
+            else:
+                print(f"\n{'=' * 60}")
+                print(f"B1观察+B2确认单股回测: {ts_codes[0]}")
+                print(f"{'=' * 60}")
+                print(f"总交易次数: {result.total_trades}")
+                print(f"胜率:       {result.win_rate:.1%}")
+                print(f"平均单笔:   {result.avg_pnl:+.2f}%")
+                print(f"盈亏比:     {result.profit_factor:.2f}")
+                print(f"总收益率:   {result.total_return:+.2%}")
+                print(f"最大回撤:   {result.max_drawdown:.2%}")
+                print(f"夏普比率:   {result.sharpe_ratio:.2f}")
+        else:
+            pool = run_b1_b2_pool(
+                ts_codes,
+                days=days,
+                config=cfg,
+                loop_config=lc,
+                active_mv_enabled=active_mv_enabled,
+                active_mv_duckdb_path=active_mv_duckdb,
+                active_mv_path=active_mv_path,
+            )
+            if use_json:
+                _json_output(_b1_b2_pool_to_dict(pool))
+            else:
+                _print_b1_b2_pool_summary(pool)
+
     else:
         _error(f"未知回测子命令: {sub}")
+
+
+# ==================== 1.5 market ====================
+
+
+def cmd_market_timing(args) -> None:
+    """市场择时指标命令。"""
+    from modules.market_timing import compute_market_timing, format_market_timing
+
+    result = compute_market_timing(
+        trade_date=getattr(args, "date", None),
+        index_code=getattr(args, "index", "000001.SH"),
+        days=getattr(args, "days", 120),
+        duckdb_path=getattr(args, "duckdb", None),
+    )
+
+    if getattr(args, "json", False):
+        _json_output(result.__dict__)
+    else:
+        print(format_market_timing(result))
 
 
 # ==================== 2. cmd_trade ====================
@@ -990,13 +1182,34 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest="command", help="子命令", required=True)
 
     # ── backtest ──
-    p_bt = subparsers.add_parser("backtest", help="回测（shaofu / multi / portfolio）")
-    p_bt.add_argument("backtest_sub", choices=["shaofu", "multi", "portfolio"], help="回测类型")
-    p_bt.add_argument("ts_code", nargs="?", help="股票代码（shaofu/multi 必填）")
-    p_bt.add_argument("codes", nargs="?", help="股票代码列表（portfolio 用，逗号分隔）")
-    p_bt.add_argument("--days", type=int, default=250, help="回测天数")
+    p_bt = subparsers.add_parser("backtest", help="回测（shaofu / multi / portfolio / b2-confirm）")
+    p_bt.add_argument(
+        "backtest_sub",
+        choices=["shaofu", "multi", "portfolio", "b2-confirm"],
+        help="回测类型",
+    )
+    p_bt.add_argument("ts_code", nargs="?", help="股票代码（shaofu/multi/b2-confirm 单股必填）")
+    p_bt.add_argument("codes", nargs="?", help="股票代码列表（portfolio/b2-confirm 用，逗号分隔）")
+    p_bt.add_argument("--days", type=int, default=500, help="回测天数（b2-confirm 默认 500）")
     p_bt.add_argument("--json", action="store_true", help="JSON 输出")
     p_bt.add_argument("--strategy", default=None, help="策略过滤（暂保留）")
+    # b2-confirm 参数
+    p_bt.add_argument("--b2-min-pct", type=float, default=4.0, help="B2 涨幅阈值（默认 4.0）")
+    p_bt.add_argument("--b2-min-vol", type=float, default=2.0, help="B2 量比阈值（默认 2.0）")
+    p_bt.add_argument("--b2-j-max", type=float, default=55.0, help="B2 当日 J 值上限（默认 55）")
+    p_bt.add_argument("--b1-j-threshold", type=float, default=-10.0, help="B1 J 值阈值（默认 -10）")
+    p_bt.add_argument("--observe-min", type=int, default=3, help="观察窗口起点（默认 3）")
+    p_bt.add_argument("--observe-max", type=int, default=5, help="观察窗口终点（默认 5）")
+    p_bt.add_argument("--max-gap-open-pct", type=float, default=5.0, help="次日高开过滤（默认 5，100 表示关闭）")
+    p_bt.add_argument("--stop-loss-pct", type=float, default=-0.05, help="止损比例（默认 -0.05）")
+    p_bt.add_argument("--bbi-days", type=int, default=2, help="BBI 连续跌破天数（默认 2）")
+    p_bt.add_argument("--min-hold", type=int, default=2, help="最少持仓天数（默认 2）")
+    p_bt.add_argument("--walk-forward", action="store_true", help="运行 Walk-forward 样本外验证")
+    p_bt.add_argument("--folds", type=int, default=4, help="Walk-forward 折数（默认 4）")
+    p_bt.add_argument("--window", type=int, default=120, help="Walk-forward 单窗口交易日数（默认 120）")
+    p_bt.add_argument("--active-mv-gate", action="store_true", help="启用活跃市值全局闸门")
+    p_bt.add_argument("--active-mv-duckdb", default=None, help="活跃市值 DuckDB 路径")
+    p_bt.add_argument("--active-mv-path", default=None, help="活跃市值 CSV 路径")
 
     # ── trade ──
     p_tr = subparsers.add_parser("trade", help="交易记录管理（add / list / review / stats）")
@@ -1008,6 +1221,16 @@ if __name__ == "__main__":
     # ── daily ──
     p_dy = subparsers.add_parser("daily", help="每日工作流")
     p_dy.add_argument("--json", action="store_true", help="JSON 输出")
+
+    # ── market（市场择时）──
+    p_market = subparsers.add_parser("market", help="市场择时指标")
+    p_market_sub = p_market.add_subparsers(dest="market_sub", required=True)
+    p_market_timing = p_market_sub.add_parser("timing", help="计算市场择时指标")
+    p_market_timing.add_argument("--date", default=None, help="交易日 YYYYMMDD，默认最新")
+    p_market_timing.add_argument("--index", default="000001.SH", help="大盘指数代码")
+    p_market_timing.add_argument("--days", type=int, default=120, help="指数 K 线回溯天数")
+    p_market_timing.add_argument("--duckdb", default=None, help="DuckDB 全市场数据库路径")
+    p_market_timing.add_argument("--json", action="store_true", help="JSON 输出")
 
     # ── simulate ──
     p_sim = subparsers.add_parser("simulate", help="端到端交易模拟回测（择时+选股+仓位+卖出）")
@@ -1047,6 +1270,7 @@ if __name__ == "__main__":
         "backtest": cmd_backtest,
         "trade": cmd_trade,
         "daily": cmd_daily,
+        "market": cmd_market_timing,
         "simulate": cmd_simulate,
         "verify": cmd_verify_v10,
     }
