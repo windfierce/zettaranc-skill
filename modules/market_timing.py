@@ -19,7 +19,6 @@ from __future__ import annotations
 import math
 import statistics
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Optional
 
 from .core.market_context import MarketRegime
@@ -28,8 +27,26 @@ from .market_regime import MarketRegimeClassifier
 from .database import get_connection
 from .active_market_value import get_active_market_gate, get_active_market_value
 
-# 常见指数代码，计算市场广度时排除
-_INDEX_BLACKLIST = ("000001.SH", "399001.SZ", "399006.SZ", "000300.SH")
+# 常见指数代码，计算市场广度时排除（与 modules.index_sync.DEFAULT_INDEX_CODES 保持一致）
+# 任何新增/删除默认指数时，这里必须同步更新；否则会把指数行当作"个股"纳入涨跌/成交统计。
+_INDEX_CODES_TO_EXCLUDE = (
+    "000001.SH",  # 上证指数
+    "399001.SZ",  # 深证成指
+    "399006.SZ",  # 创业板指
+    "000300.SH",  # 沪深300
+    "000905.SH",  # 中证500
+    "000688.SH",  # 科创50
+)
+
+
+def _index_not_in_sql_fragment() -> str:
+    """生成 `NOT IN ('code1','code2',...)` 形式的 SQL 片段（DuckDB / SQLite 通用）。"""
+    return ", ".join(f"'{c}'" for c in _INDEX_CODES_TO_EXCLUDE)
+
+
+def _index_not_in_params() -> tuple:
+    """参数化查询的占位符元组（`ts_code NOT IN (?, ?, ...)`）。"""
+    return _INDEX_CODES_TO_EXCLUDE
 
 
 @dataclass
@@ -183,7 +200,7 @@ def _load_market_snapshot_duckdb(con: Any, trade_date: str) -> dict[str, float]:
             COALESCE(SUM(turnover), 0) AS total_amount
         FROM prev
         WHERE date = ? AND prev_close IS NOT NULL AND prev_close > 0
-          AND thscode NOT IN ('000001.SH','399001.SZ','399006.SZ','000300.SH')
+          AND thscode NOT IN ({_index_not_in_sql_fragment()})
         """,
         [iso_date],
     ).fetchone()
@@ -195,7 +212,7 @@ def _load_market_snapshot_sqlite(trade_date: str) -> dict[str, float]:
     """从项目 SQLite 统计指定日期全市场涨跌/成交（数据量有限）。"""
     with get_connection() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total,
                 COALESCE(SUM(CASE WHEN pct_chg > 0 THEN 1 ELSE 0 END), 0) AS advancers,
@@ -206,7 +223,7 @@ def _load_market_snapshot_sqlite(trade_date: str) -> dict[str, float]:
                 COALESCE(SUM(CASE WHEN pct_chg <= -5 THEN 1 ELSE 0 END), 0) AS strong_down,
                 COALESCE(SUM(amount), 0) AS total_amount
             FROM daily_kline
-            WHERE trade_date = ?
+            WHERE trade_date = ? AND ts_code NOT IN ({_index_not_in_sql_fragment()})
             """,
             (trade_date,),
         ).fetchone()
@@ -218,10 +235,10 @@ def _load_amount_history_duckdb(con: Any, trade_date: str, lookback: int = 40) -
     """从 DuckDB 取最近 lookback 个交易日全市场成交额。"""
     iso_date = _normalize_date(trade_date)
     rows = con.execute(
-        """
+        f"""
         SELECT date, SUM(turnover) AS amt
         FROM v_daily_qfq
-        WHERE date <= ? AND thscode NOT IN ('000001.SH','399001.SZ','399006.SZ','000300.SH')
+        WHERE date <= ? AND thscode NOT IN ({_index_not_in_sql_fragment()})
         GROUP BY date
         ORDER BY date DESC
         LIMIT ?
@@ -235,10 +252,10 @@ def _load_amount_history_sqlite(trade_date: str, lookback: int = 40) -> list[flo
     """从项目 SQLite 取最近 lookback 个交易日全市场成交额。"""
     with get_connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT trade_date, SUM(amount) AS amt
             FROM daily_kline
-            WHERE trade_date <= ?
+            WHERE trade_date <= ? AND ts_code NOT IN ({_index_not_in_sql_fragment()})
             GROUP BY trade_date
             ORDER BY trade_date DESC
             LIMIT ?
@@ -398,11 +415,18 @@ def compute_market_timing(
     else:
         if trade_date is None:
             with get_connection() as conn:
+                # 先按本指数查最近交易日，空则按全表最近交易日兜底（避免周末/节假日 datetime.now() 返回非交易日）
                 row = conn.execute(
                     "SELECT MAX(trade_date) FROM daily_kline WHERE ts_code = ?",
                     (index_code,),
                 ).fetchone()
-            trade_date = str(row[0]) if row and row[0] else datetime.now().strftime("%Y%m%d")
+                if row and row[0]:
+                    trade_date = str(row[0])
+                else:
+                    row = conn.execute("SELECT MAX(trade_date) FROM daily_kline").fetchone()
+                    trade_date = str(row[0]) if row and row[0] else None
+            if trade_date is None:
+                raise ValueError("SQLite 路径无任何 daily_kline 数据，无法确定 trade_date")
         klines = _load_index_klines_sqlite(index_code, days)
         snapshot = _load_market_snapshot_sqlite(trade_date)
         amount_history = _load_amount_history_sqlite(trade_date)

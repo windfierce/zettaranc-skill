@@ -116,8 +116,11 @@ def _run_stock_klines(
                 entry_idx = i + 1
                 entry_k = klines[entry_idx]
 
-                # 日期窗口过滤
-                if start_date and (entry_k.trade_date < start_date or entry_k.trade_date > end_date):
+                # 日期窗口过滤（任意一端为 None 则跳过该端，避免与 None 比较抛 TypeError）
+                if start_date is not None and entry_k.trade_date < start_date:
+                    i += 1
+                    continue
+                if end_date is not None and entry_k.trade_date > end_date:
                     i += 1
                     continue
 
