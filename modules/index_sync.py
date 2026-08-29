@@ -76,9 +76,11 @@ def sync_indices_to_duckdb(
         for code in codes:
             try:
                 df = datasource.get_index_daily(code, start_date=start_date, end_date=end_date)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("获取指数 %s 失败: %s", code, e)
-                details[code] = {"rows": 0, "status": f"error: {e}"}
+            except Exception:  # noqa: BLE001
+                # 异常信息（可能含 URL/鉴权 token）只能进日志，绝不能进返回 dict
+                # 返回 dict 会被 cli.py 直接 stdout + 序列化到 --json
+                logger.exception("获取指数 %s 失败", code)
+                details[code] = {"rows": 0, "status": "error: api"}
                 continue
 
             if df is None or getattr(df, "empty", True):

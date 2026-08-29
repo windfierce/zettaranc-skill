@@ -20,7 +20,6 @@ from ..indicators import DailyData, get_kline_data
 from ..loop_engine import LoopConfig, LoopTrade, ShaofuLoopEngine, _calc_stop_loss_price
 from ..backtest_six_step import ShaofuBacktestResult, _calc_metrics
 from ..strategies.b1_b2_confirm import B1B2Config, is_b2_signal, is_high_open_skip
-from ..active_market_value import get_active_market_gate
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +80,13 @@ def _run_stock_klines(
     n = len(klines)
     i = 20
 
-    def _gate(date: str) -> str:
-        if not active_mv_enabled:
-            return "OPEN"
-        return get_active_market_gate(
+    def _gate(date: str):
+        """活跃市值闸门判定(v4.3+ 统一走 apply_active_mv_gate)。"""
+        from modules.active_market_value import apply_active_mv_gate
+
+        return apply_active_mv_gate(
             date,
+            enabled=active_mv_enabled,
             duckdb_path=active_mv_duckdb_path,
             path=active_mv_path,
         )
@@ -93,7 +94,7 @@ def _run_stock_klines(
     while i < n - 1:
         if current is not None:
             # 活跃市值 CLEAR：无条件清仓
-            if _gate(klines[i].trade_date) == "CLEAR":
+            if _gate(klines[i].trade_date).value == "CLEAR":
                 last = klines[i]
                 pnl_pct = (last.close - current.entry_price) / current.entry_price * 100.0 if current.entry_price else 0.0
                 current.exit_date = last.trade_date
@@ -116,8 +117,11 @@ def _run_stock_klines(
                 entry_idx = i + 1
                 entry_k = klines[entry_idx]
 
-                # 日期窗口过滤
-                if start_date and (entry_k.trade_date < start_date or entry_k.trade_date > end_date):
+                # 日期窗口过滤（任意一端为 None 则跳过该端，避免与 None 比较抛 TypeError）
+                if start_date is not None and entry_k.trade_date < start_date:
+                    i += 1
+                    continue
+                if end_date is not None and entry_k.trade_date > end_date:
                     i += 1
                     continue
 

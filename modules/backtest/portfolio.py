@@ -302,8 +302,10 @@ class PortfolioBacktestEngine:
             # 活跃市值全局闸门：CLEAR 强制清仓，非 OPEN 禁止新开仓
             active_mv_allow_new = True
             if config.active_mv_enabled:
+                from modules.active_market_value import GateAction
+
                 active_mv_gate = self._active_mv_gate(date)
-                if active_mv_gate == "CLEAR":
+                if active_mv_gate is GateAction.CLEAR:
                     cash = self._force_close_all_active_mv(
                         date=date,
                         klines_map=klines_map,
@@ -313,7 +315,7 @@ class PortfolioBacktestEngine:
                         completed_trades=completed_trades,
                     )
                     active_mv_allow_new = False
-                elif active_mv_gate != "OPEN":
+                elif active_mv_gate is not GateAction.OPEN:
                     active_mv_allow_new = False
 
             # Step 2 & 3: 扫描 B1 并买入
@@ -555,14 +557,16 @@ class PortfolioBacktestEngine:
             base_score += 0.1 * (len(signals) - 1)
         return base_score
 
-    def _active_mv_gate(self, date: str) -> str:
-        """获取活跃市值全局闸门；未启用时返回 OPEN（不限制）。"""
-        if not self.portfolio_config.active_mv_enabled:
-            return "OPEN"
-        from modules.active_market_value import get_active_market_gate
+    def _active_mv_gate(self, date: str):
+        """获取活跃市值全局闸门（v4.3+ 统一走 apply_active_mv_gate）。
 
-        return get_active_market_gate(
+        返回 GateAction 枚举；调用方按 .value 与字符串比较，或直接 == GateAction.CLEAR。
+        """
+        from modules.active_market_value import apply_active_mv_gate
+
+        return apply_active_mv_gate(
             date,
+            enabled=self.portfolio_config.active_mv_enabled,
             duckdb_path=self.portfolio_config.active_mv_duckdb_path,
             path=self.portfolio_config.active_mv_path,
         )

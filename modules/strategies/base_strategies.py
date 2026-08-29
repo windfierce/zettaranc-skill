@@ -128,6 +128,17 @@ def detect_b2(klines: list[DailyData], index: int, kirin_context: dict | None = 
     """
     检测 B2 买点（已升级 MDC 多维验证 + 麒麟阶段背景）
 
+    .. deprecated::
+        v4.3+ 推荐使用 :func:`modules.strategies.b1_b2_confirm.is_b2_signal` + 配套
+        :class:`~modules.strategies.b1_b2_confirm.B1B2Config` + 回测入口
+        ``zt backtest b2-confirm``。本函数保留仅用于向后兼容(被 5 个 wiring 点引用,
+        见 modules/strategies/__init__.py:135、modules/screener/criteria.py:110、
+        modules/backtest/portfolio.py:25、modules/loop_engine_enhanced.py:100),
+        行为差异:本函数 B1 lookback 5-15 天硬编码 + 依赖麒麟阶段 + MDC 加分;
+        新函数 B1 lookback 3-5 天可配 + 忽略麒麟阶段 + 无 MDC。
+        新旧函数对同一只股票同一天会输出不同信号 — 选哪条路径用
+        ``zt backtest multi``(旧) vs ``zt backtest b2-confirm``(新)。
+
     B2 条件（B1后的确认信号）：
     1. 前几日有B1（J<-10）
     2. 放量长阳（涨幅>=4%）

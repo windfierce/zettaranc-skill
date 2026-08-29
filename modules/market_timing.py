@@ -19,7 +19,6 @@ from __future__ import annotations
 import math
 import statistics
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Optional
 
 from .core.market_context import MarketRegime
@@ -28,8 +27,26 @@ from .market_regime import MarketRegimeClassifier
 from .database import get_connection
 from .active_market_value import get_active_market_gate, get_active_market_value
 
-# 常见指数代码，计算市场广度时排除
-_INDEX_BLACKLIST = ("000001.SH", "399001.SZ", "399006.SZ", "000300.SH")
+# 常见指数代码，计算市场广度时排除（与 modules.index_sync.DEFAULT_INDEX_CODES 保持一致）
+# 任何新增/删除默认指数时，这里必须同步更新；否则会把指数行当作"个股"纳入涨跌/成交统计。
+_INDEX_CODES_TO_EXCLUDE = (
+    "000001.SH",  # 上证指数
+    "399001.SZ",  # 深证成指
+    "399006.SZ",  # 创业板指
+    "000300.SH",  # 沪深300
+    "000905.SH",  # 中证500
+    "000688.SH",  # 科创50
+)
+
+
+def _index_not_in_sql_fragment() -> str:
+    """生成 `NOT IN ('code1','code2',...)` 形式的 SQL 片段（DuckDB / SQLite 通用）。"""
+    return ", ".join(f"'{c}'" for c in _INDEX_CODES_TO_EXCLUDE)
+
+
+def _index_not_in_params() -> tuple:
+    """参数化查询的占位符元组（`ts_code NOT IN (?, ?, ...)`）。"""
+    return _INDEX_CODES_TO_EXCLUDE
 
 
 @dataclass
@@ -162,11 +179,22 @@ def _load_index_klines_sqlite(index_code: str, days: int) -> list[DailyData]:
     return _to_daily_data_list(rows)
 
 
-def _load_market_snapshot_duckdb(con: Any, trade_date: str) -> dict[str, float]:
-    """从 DuckDB 统计指定日期全市场涨跌/成交。"""
+def _load_market_snapshot_duckdb(
+    con: Any, trade_date: str, weights: Any = None
+) -> dict[str, float]:
+    """从 DuckDB 统计指定日期全市场涨跌/成交。
+
+    Args:
+        weights: MarketTimingWeights 实例,提供 limit_up_pct / limit_down_pct /
+            strong_up_pct / strong_down_pct 阈值。None 时用项目默认。
+    """
+    from modules.dynamic_config import DEFAULT_MARKET_TIMING_WEIGHTS
+
+    if weights is None:
+        weights = DEFAULT_MARKET_TIMING_WEIGHTS
     iso_date = _normalize_date(trade_date)
     row = con.execute(
-        """
+        f"""
         WITH prev AS (
             SELECT thscode, date, close, turnover,
                    LAG(close) OVER (PARTITION BY thscode ORDER BY date) AS prev_close
@@ -176,14 +204,14 @@ def _load_market_snapshot_duckdb(con: Any, trade_date: str) -> dict[str, float]:
             COUNT(*) AS total,
             COALESCE(SUM(CASE WHEN close > prev_close THEN 1 ELSE 0 END), 0) AS advancers,
             COALESCE(SUM(CASE WHEN close < prev_close THEN 1 ELSE 0 END), 0) AS decliners,
-            COALESCE(SUM(CASE WHEN (close / prev_close - 1) * 100 >= 9.5 THEN 1 ELSE 0 END), 0) AS limit_up,
-            COALESCE(SUM(CASE WHEN (close / prev_close - 1) * 100 <= -9.5 THEN 1 ELSE 0 END), 0) AS limit_down,
-            COALESCE(SUM(CASE WHEN (close / prev_close - 1) * 100 >= 5 THEN 1 ELSE 0 END), 0) AS strong_up,
-            COALESCE(SUM(CASE WHEN (close / prev_close - 1) * 100 <= -5 THEN 1 ELSE 0 END), 0) AS strong_down,
+            COALESCE(SUM(CASE WHEN (close / prev_close - 1) * 100 >= {weights.limit_up_pct} THEN 1 ELSE 0 END), 0) AS limit_up,
+            COALESCE(SUM(CASE WHEN (close / prev_close - 1) * 100 <= {weights.limit_down_pct} THEN 1 ELSE 0 END), 0) AS limit_down,
+            COALESCE(SUM(CASE WHEN (close / prev_close - 1) * 100 >= {weights.strong_up_pct} THEN 1 ELSE 0 END), 0) AS strong_up,
+            COALESCE(SUM(CASE WHEN (close / prev_close - 1) * 100 <= {weights.strong_down_pct} THEN 1 ELSE 0 END), 0) AS strong_down,
             COALESCE(SUM(turnover), 0) AS total_amount
         FROM prev
         WHERE date = ? AND prev_close IS NOT NULL AND prev_close > 0
-          AND thscode NOT IN ('000001.SH','399001.SZ','399006.SZ','000300.SH')
+          AND thscode NOT IN ({_index_not_in_sql_fragment()})
         """,
         [iso_date],
     ).fetchone()
@@ -191,22 +219,30 @@ def _load_market_snapshot_duckdb(con: Any, trade_date: str) -> dict[str, float]:
     return dict(zip(keys, [float(v) if v is not None else 0.0 for v in row]))
 
 
-def _load_market_snapshot_sqlite(trade_date: str) -> dict[str, float]:
-    """从项目 SQLite 统计指定日期全市场涨跌/成交（数据量有限）。"""
+def _load_market_snapshot_sqlite(trade_date: str, weights: Any = None) -> dict[str, float]:
+    """从项目 SQLite 统计指定日期全市场涨跌/成交（数据量有限）。
+
+    Args:
+        weights: MarketTimingWeights 实例,None 时用项目默认。
+    """
+    from modules.dynamic_config import DEFAULT_MARKET_TIMING_WEIGHTS
+
+    if weights is None:
+        weights = DEFAULT_MARKET_TIMING_WEIGHTS
     with get_connection() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total,
                 COALESCE(SUM(CASE WHEN pct_chg > 0 THEN 1 ELSE 0 END), 0) AS advancers,
                 COALESCE(SUM(CASE WHEN pct_chg < 0 THEN 1 ELSE 0 END), 0) AS decliners,
-                COALESCE(SUM(CASE WHEN pct_chg >= 9.5 THEN 1 ELSE 0 END), 0) AS limit_up,
-                COALESCE(SUM(CASE WHEN pct_chg <= -9.5 THEN 1 ELSE 0 END), 0) AS limit_down,
-                COALESCE(SUM(CASE WHEN pct_chg >= 5 THEN 1 ELSE 0 END), 0) AS strong_up,
-                COALESCE(SUM(CASE WHEN pct_chg <= -5 THEN 1 ELSE 0 END), 0) AS strong_down,
+                COALESCE(SUM(CASE WHEN pct_chg >= {weights.limit_up_pct} THEN 1 ELSE 0 END), 0) AS limit_up,
+                COALESCE(SUM(CASE WHEN pct_chg <= {weights.limit_down_pct} THEN 1 ELSE 0 END), 0) AS limit_down,
+                COALESCE(SUM(CASE WHEN pct_chg >= {weights.strong_up_pct} THEN 1 ELSE 0 END), 0) AS strong_up,
+                COALESCE(SUM(CASE WHEN pct_chg <= {weights.strong_down_pct} THEN 1 ELSE 0 END), 0) AS strong_down,
                 COALESCE(SUM(amount), 0) AS total_amount
             FROM daily_kline
-            WHERE trade_date = ?
+            WHERE trade_date = ? AND ts_code NOT IN ({_index_not_in_sql_fragment()})
             """,
             (trade_date,),
         ).fetchone()
@@ -218,10 +254,10 @@ def _load_amount_history_duckdb(con: Any, trade_date: str, lookback: int = 40) -
     """从 DuckDB 取最近 lookback 个交易日全市场成交额。"""
     iso_date = _normalize_date(trade_date)
     rows = con.execute(
-        """
+        f"""
         SELECT date, SUM(turnover) AS amt
         FROM v_daily_qfq
-        WHERE date <= ? AND thscode NOT IN ('000001.SH','399001.SZ','399006.SZ','000300.SH')
+        WHERE date <= ? AND thscode NOT IN ({_index_not_in_sql_fragment()})
         GROUP BY date
         ORDER BY date DESC
         LIMIT ?
@@ -235,10 +271,10 @@ def _load_amount_history_sqlite(trade_date: str, lookback: int = 40) -> list[flo
     """从项目 SQLite 取最近 lookback 个交易日全市场成交额。"""
     with get_connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT trade_date, SUM(amount) AS amt
             FROM daily_kline
-            WHERE trade_date <= ?
+            WHERE trade_date <= ? AND ts_code NOT IN ({_index_not_in_sql_fragment()})
             GROUP BY trade_date
             ORDER BY trade_date DESC
             LIMIT ?
@@ -348,20 +384,30 @@ def _active_mv_score(point) -> float:
     return max(0.0, min(100.0, 50.0 + point.pct_chg * 10.0))
 
 
-def _classify_regime(composite: float) -> str:
-    """综合分 → 市场状态。"""
-    if composite >= 65.0:
+def _classify_regime(composite: float, weights: Any = None) -> str:
+    """综合分 → 市场状态(v4.3+ 阈值走 MarketTimingWeights)。
+
+    Args:
+        composite: 综合分 0-100
+        weights: MarketTimingWeights 实例,None 时用项目默认
+    """
+    from modules.dynamic_config import DEFAULT_MARKET_TIMING_WEIGHTS
+
+    if weights is None:
+        weights = DEFAULT_MARKET_TIMING_WEIGHTS
+    if composite >= weights.strong_threshold:
         return MarketRegime.STRONG.value
-    if composite <= 40.0:
+    if composite <= weights.weak_threshold:
         return MarketRegime.WEAK.value
     return MarketRegime.NEUTRAL.value
 
 
 def compute_market_timing(
-    trade_date: str | None = None,
+    trade_date: Optional[str] = None,
     index_code: str = "000001.SH",
     days: int = 120,
-    duckdb_path: str | None = None,
+    duckdb_path: Optional[str] = None,
+    weights: Optional[MarketTimingWeights] = None,
 ) -> MarketTimingIndicators:
     """计算市场择时指标。
 
@@ -373,7 +419,16 @@ def compute_market_timing(
 
     Returns:
         MarketTimingIndicators
+
+    Note:
+        weights (v4.3+):综合分权重与阈值抽到 modules.dynamic_config.MarketTimingWeights,
+        默认用 DEFAULT_MARKET_TIMING_WEIGHTS(与原 magic numbers 完全一致)。
+        改阈值 / 调权重不再需要改本函数。
     """
+    if weights is None:
+        from modules.dynamic_config import DEFAULT_MARKET_TIMING_WEIGHTS
+
+        weights = DEFAULT_MARKET_TIMING_WEIGHTS
     using_duckdb = duckdb_path is not None
 
     if using_duckdb:
@@ -391,20 +446,27 @@ def compute_market_timing(
             # DuckDB 通常不包含指数，指数 K 线回退到项目 SQLite
             if not klines:
                 klines = _load_index_klines_sqlite(index_code, days)
-            snapshot = _load_market_snapshot_duckdb(con, trade_date)
+            snapshot = _load_market_snapshot_duckdb(con, trade_date, weights=weights)
             amount_history = _load_amount_history_duckdb(con, trade_date)
         finally:
             con.close()
     else:
         if trade_date is None:
             with get_connection() as conn:
+                # 先按本指数查最近交易日，空则按全表最近交易日兜底（避免周末/节假日 datetime.now() 返回非交易日）
                 row = conn.execute(
                     "SELECT MAX(trade_date) FROM daily_kline WHERE ts_code = ?",
                     (index_code,),
                 ).fetchone()
-            trade_date = str(row[0]) if row and row[0] else datetime.now().strftime("%Y%m%d")
+                if row and row[0]:
+                    trade_date = str(row[0])
+                else:
+                    row = conn.execute("SELECT MAX(trade_date) FROM daily_kline").fetchone()
+                    trade_date = str(row[0]) if row and row[0] else None
+            if trade_date is None:
+                raise ValueError("SQLite 路径无任何 daily_kline 数据，无法确定 trade_date")
         klines = _load_index_klines_sqlite(index_code, days)
-        snapshot = _load_market_snapshot_sqlite(trade_date)
+        snapshot = _load_market_snapshot_sqlite(trade_date, weights=weights)
         amount_history = _load_amount_history_sqlite(trade_date)
 
     trend_score, ma_alignment, slope, white_yellow = _trend_score_from_index(klines)
@@ -423,12 +485,12 @@ def compute_market_timing(
     amv_gate = get_active_market_gate(trade_date, duckdb_path=active_mv_duckdb)
 
     composite = (
-        trend_score * 0.25
-        + b_score * 0.20
-        + m_score * 0.15
-        + r_score * 0.15
-        + s_score * 0.10
-        + amv_score * 0.15
+        trend_score * weights.weight_trend
+        + b_score * weights.weight_breadth
+        + m_score * weights.weight_moneyflow
+        + r_score * weights.weight_risk
+        + s_score * weights.weight_sentiment
+        + amv_score * weights.weight_amv
     )
     composite = max(0.0, min(100.0, composite))
 
@@ -470,7 +532,7 @@ def compute_market_timing(
         active_mv_score=round(amv_score, 2),
         active_mv_gate=amv_gate,
         composite_score=round(composite, 2),
-        regime=_classify_regime(composite),
+        regime=_classify_regime(composite, weights=weights),
         notes=notes,
     )
 

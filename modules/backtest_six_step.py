@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from .loop_engine import ShaofuLoopEngine, LoopConfig, LoopTrade, _calc_stop_loss_price
 from .indicators import DailyData, get_kline_data
-from .market_regime import MarketRegime
+from .market_regime import TrendRegime
 from .statistics import sharpe_t_test, monte_carlo_permutation_test, analyze_sub_periods
 from .statistics.criteria import validate_strategy, ValidationReport, CriteriaLevel
 from .core.metrics import TRADING_DAYS_PER_YEAR, compute_drawdown, compute_sharpe, daily_returns
@@ -549,7 +549,7 @@ def backtest_shaofu_portfolio_integrated(
             current_config = dynamic_config.get_config(regime)
             regime_str = regime.value
         else:
-            current_config = dynamic_config.get_config(MarketRegime.SIDEWAYS)
+            current_config = dynamic_config.get_config(TrendRegime.SIDEWAYS)
             regime_str = "SIDEWAYS"
 
         # 获取当日日期字符串（优先使用第一只有数据的股票）
@@ -714,7 +714,7 @@ def backtest_shaofu_portfolio_integrated(
                 regime=(
                     regime_classifier.classify_date(index_klines, day_idx)
                     if has_regime and regime_classifier is not None and day_idx < len(index_klines)
-                    else MarketRegime.SIDEWAYS
+                    else TrendRegime.SIDEWAYS
                 ),
             )
             if shares < 100:

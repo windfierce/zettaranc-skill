@@ -24,10 +24,10 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import fields, replace
+from dataclasses import dataclass, fields, replace
 
 from modules.loop_engine import LoopConfig
-from modules.market_regime import MarketRegime
+from modules.market_regime import TrendRegime
 from .constants import (
     BACKTEST_BEAR_POSITION_PCT,
     BACKTEST_BULL_POSITION_PCT,
@@ -36,6 +36,78 @@ from .constants import (
     BACKTEST_RANGE_POSITION_PCT,
     BACKTEST_TIGHT_STOP_LOSS_PCT,
 )
+
+
+@dataclass(frozen=True)
+class MarketTimingWeights:
+    """市场择时权重与阈值（v4.3+ 从 modules.market_timing 抽出可调参数）。
+
+    - 6 个综合分权重：trend / breadth / moneyflow / risk / sentiment / amv,合计应为 1.0
+    - 2 个状态分类阈值：composite >= strong_threshold 视为强势;
+      composite <= weak_threshold 视为弱势;中间为震荡
+    - 2 个强弱势阈值：单日涨跌幅 >= strong_up_pct 算强势上涨,
+      <= strong_down_pct 算强势下跌(用于市场广度 / 情绪打分的子项)
+    - 2 个涨跌停阈值:limit_up_pct / limit_down_pct(A 股硬性规则,默认 9.5% / -9.5%;
+      注:涨跌停 ±10% / ±20% 是交易所规则,此处的 9.5% 留 0.5% buffer 是为了容错)
+    """
+
+    # 综合分权重(应合计 1.0)
+    weight_trend: float = 0.25
+    weight_breadth: float = 0.20
+    weight_moneyflow: float = 0.15
+    weight_risk: float = 0.15
+    weight_sentiment: float = 0.10
+    weight_amv: float = 0.15
+
+    # 状态分类阈值
+    strong_threshold: float = 65.0
+    weak_threshold: float = 40.0
+
+    # 强弱势涨跌阈值
+    strong_up_pct: float = 5.0
+    strong_down_pct: float = -5.0
+
+    # 涨跌停阈值(A 股硬规则 + 0.5% buffer,用于 limit_up / limit_down 计数)
+    limit_up_pct: float = 9.5
+    limit_down_pct: float = -9.5
+
+    def weights_sum(self) -> float:
+        """综合分权重之和(应 ≈ 1.0;不强制,但若偏差大说明配置错了)。"""
+        return (
+            self.weight_trend
+            + self.weight_breadth
+            + self.weight_moneyflow
+            + self.weight_risk
+            + self.weight_sentiment
+            + self.weight_amv
+        )
+
+    def validate(self) -> None:
+        """校验参数合法性。"""
+        if self.strong_threshold <= self.weak_threshold:
+            raise ValueError(
+                f"strong_threshold ({self.strong_threshold}) 必须 > "
+                f"weak_threshold ({self.weak_threshold})"
+            )
+        if self.strong_up_pct <= 0:
+            raise ValueError(f"strong_up_pct 必须 > 0,实际 {self.strong_up_pct}")
+        if self.strong_down_pct >= 0:
+            raise ValueError(f"strong_down_pct 必须 < 0,实际 {self.strong_down_pct}")
+        if self.limit_up_pct <= 0 or self.limit_down_pct >= 0:
+            raise ValueError(
+                f"limit_up_pct ({self.limit_up_pct}) 必须 > 0 且 "
+                f"limit_down_pct ({self.limit_down_pct}) 必须 < 0"
+            )
+        s = self.weights_sum()
+        if abs(s - 1.0) > 0.01:
+            raise ValueError(
+                f"6 个综合分权重之和应为 1.0,实际 {s:.4f};"
+                f"权重偏差 > 0.01 时综合分会被异常放大或压缩"
+            )
+
+
+# 项目默认权重(与原 modules/market_timing.py 内置 magic numbers 完全一致)
+DEFAULT_MARKET_TIMING_WEIGHTS = MarketTimingWeights()
 
 
 # 默认参数映射表：各市场状态下的参数覆盖
@@ -83,7 +155,7 @@ class DynamicConfigAdapter:
 
     Example:
         >>> adapter = DynamicConfigAdapter()
-        >>> config = adapter.get_config(MarketRegime.BULL)
+        >>> config = adapter.get_config(TrendRegime.BULL)
         >>> config.j_threshold
         18
         >>> config.position_pct
@@ -106,7 +178,7 @@ class DynamicConfigAdapter:
                 else:
                     self._regime_params[regime_key] = dict(params)
 
-    def get_config(self, regime: MarketRegime) -> LoopConfig:
+    def get_config(self, regime: TrendRegime) -> LoopConfig:
         """
         根据市场状态获取对应的 LoopConfig
 
@@ -148,7 +220,7 @@ class DynamicConfigAdapter:
         Returns:
             {状态名称: LoopConfig} 字典，包含 BULL / BEAR / SIDEWAYS 三种状态的完整配置
         """
-        return {regime_key: self.get_config(MarketRegime(regime_key)) for regime_key in self._regime_params}
+        return {regime_key: self.get_config(TrendRegime(regime_key)) for regime_key in self._regime_params}
 
     def get_regime_params(self, regime: str) -> dict:
         """
@@ -178,7 +250,7 @@ if __name__ == "__main__":
     print("\n【测试1】默认参数映射")
     adapter = DynamicConfigAdapter()
 
-    for regime in MarketRegime:
+    for regime in TrendRegime:
         config = adapter.get_config(regime)
         print(f"\n  {regime.value}:")
         print(f"    j_threshold     = {config.j_threshold}")
@@ -192,7 +264,7 @@ if __name__ == "__main__":
     print("\n【测试2】自定义 base_config")
     custom_base = LoopConfig(j_threshold=10, position_pct=0.25)
     adapter2 = DynamicConfigAdapter(base_config=custom_base)
-    bear_config = adapter2.get_config(MarketRegime.BEAR)
+    bear_config = adapter2.get_config(TrendRegime.BEAR)
     print(f"  BEAR j_threshold = {bear_config.j_threshold} (覆盖为5)")
     print(f"  BEAR position_pct = {bear_config.position_pct} (覆盖为0.15)")
     print(f"  BEAR stop_loss_method = {bear_config.stop_loss_method} (继承自base: entry_low)")
@@ -204,7 +276,7 @@ if __name__ == "__main__":
             "BULL": {"j_threshold": 25, "position_pct": 0.5},
         }
     )
-    bull_config = adapter3.get_config(MarketRegime.BULL)
+    bull_config = adapter3.get_config(TrendRegime.BULL)
     print(f"  BULL j_threshold = {bull_config.j_threshold} (自定义为25)")
     print(f"  BULL position_pct = {bull_config.position_pct} (自定义为0.5)")
     print(f"  BULL stop_loss_pct = {bull_config.stop_loss_pct} (保留默认映射-0.07)")
@@ -212,7 +284,7 @@ if __name__ == "__main__":
     # 测试4: set_regime_params 动态更新
     print("\n【测试4】set_regime_params 动态更新")
     adapter.set_regime_params("BULL", {"j_threshold": 20, "new_param": 999})
-    updated = adapter.get_config(MarketRegime.BULL)
+    updated = adapter.get_config(TrendRegime.BULL)
     print(f"  BULL j_threshold = {updated.j_threshold} (更新为20)")
 
     # 测试5: get_all_configs

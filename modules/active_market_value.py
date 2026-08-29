@@ -10,8 +10,12 @@
 
 from __future__ import annotations
 
+import bisect
 import csv
+import logging
+import os
 from dataclasses import dataclass
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -34,7 +38,10 @@ class ActiveMarketValuePoint:
 
 
 def default_path() -> Path:
-    """默认 CSV 路径。"""
+    """默认 CSV 路径。优先读 DATA_DIR 环境变量，缺省时回退到包内 data/ 目录。"""
+    data_dir = os.getenv("DATA_DIR")
+    if data_dir:
+        return Path(data_dir) / "0amv_active_market_value.csv"
     return Path(__file__).resolve().parent.parent / "data" / "0amv_active_market_value.csv"
 
 
@@ -73,31 +80,34 @@ def _finalize_points(raw_rows: list[dict]) -> list[ActiveMarketValuePoint]:
     return points
 
 
-@lru_cache(maxsize=2)
-def _load_csv_cached(path: str) -> list[ActiveMarketValuePoint]:
-    """从 CSV 加载（带缓存）。"""
-    csv_path = Path(path)
+def _read_csv_rows(csv_path: Path) -> list[dict]:
+    """从 CSV 读取原始行（单行解析失败时跳过并 warning,而不是整文件 abort）。"""
     raw_rows: list[dict] = []
     with csv_path.open(encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            raw_rows.append(
-                {
-                    "date": row["date"],
-                    "open": row["open"],
-                    "high": row["high"],
-                    "low": row["low"],
-                    "close": row["close"],
-                    "volume": row["volume"],
-                    "amount": row["amount"],
-                }
-            )
-    return _finalize_points(raw_rows)
+        for line_no, row in enumerate(reader, start=2):  # 行号从 2 开始（标题行占 1）
+            try:
+                raw_rows.append(
+                    {
+                        "date": row["date"],
+                        "open": row["open"],
+                        "high": row["high"],
+                        "low": row["low"],
+                        "close": row["close"],
+                        "volume": row["volume"],
+                        "amount": row["amount"],
+                    }
+                )
+            except KeyError as e:
+                logging.getLogger(__name__).warning(
+                    "0AMV CSV 第 %d 行缺字段 %s，已跳过", line_no, e
+                )
+                continue
+    return raw_rows
 
 
-@lru_cache(maxsize=4)
-def _load_duckdb_cached(duckdb_path: str) -> list[ActiveMarketValuePoint]:
-    """从 DuckDB 的 active_market_value 表加载（带缓存）。"""
+def _read_duckdb_rows(duckdb_path: str) -> list[dict]:
+    """从 DuckDB 的 active_market_value 表读取原始行。"""
     try:
         import duckdb  # noqa: PLC0415
     except ImportError as e:
@@ -112,23 +122,89 @@ def _load_duckdb_cached(duckdb_path: str) -> list[ActiveMarketValuePoint]:
     finally:
         con.close()
 
-    raw_rows = [
+    return [
         {"date": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4], "volume": r[5], "amount": r[6]}
         for r in rows
     ]
-    return _finalize_points(raw_rows)
+
+
+# mtime 感知的 lru_cache:key 是 (path, mtime)，文件变更时自动失效，避免 lru_cache
+# 单纯用 path 导致的"热重载后拿到旧数据"和"长跑进程内存泄漏"两个问题。
+@lru_cache(maxsize=8)
+def _load_csv_cached(path: str, mtime: float) -> list[ActiveMarketValuePoint]:
+    """从 CSV 加载（按 (path, mtime) 缓存）。"""
+    return _finalize_points(_read_csv_rows(Path(path)))
+
+
+@lru_cache(maxsize=8)
+def _load_duckdb_cached(duckdb_path: str, mtime: float) -> list[ActiveMarketValuePoint]:
+    """从 DuckDB 的 active_market_value 表加载（按 (path, mtime) 缓存）。"""
+    return _finalize_points(_read_duckdb_rows(duckdb_path))
+
+
+def _safe_mtime(path: str) -> float:
+    """取 path 的 mtime;文件不存在返回 0（让 cache 命中一个稳定的空 key）。"""
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _build_index(points: list[ActiveMarketValuePoint]) -> dict[str, ActiveMarketValuePoint]:
+    """date → point 的 O(1) 索引，替代线性扫描。"""
+    return {p.date: p for p in points}
+
+
+# 同样按 (path, mtime) 缓存索引;索引失效时点列表也失效（同一 mtime 触发）。
+@lru_cache(maxsize=8)
+def _index_csv_cached(path: str, mtime: float) -> dict[str, ActiveMarketValuePoint]:
+    return _build_index(_load_csv_cached(path, mtime))
+
+
+@lru_cache(maxsize=8)
+def _index_duckdb_cached(duckdb_path: str, mtime: float) -> dict[str, ActiveMarketValuePoint]:
+    return _build_index(_load_duckdb_cached(duckdb_path, mtime))
+
+
+def clear_cache() -> None:
+    """显式清空所有 0AMV 缓存（测试/CSV 热重载时调用）。"""
+    _load_csv_cached.cache_clear()
+    _load_duckdb_cached.cache_clear()
+    _index_csv_cached.cache_clear()
+    _index_duckdb_cached.cache_clear()
+
+
+def _load_index_and_rows(
+    path: Optional[str], duckdb_path: Optional[str]
+) -> tuple[list[ActiveMarketValuePoint], dict[str, ActiveMarketValuePoint]]:
+    """返回 (rows, date→point 索引)。O(1) 查找用索引，需要 idx 算 cum 用 rows。
+
+    优先 DuckDB，失败/空时回退 CSV。两边都按 (path, mtime) 缓存，文件变更自动失效。
+    """
+    if duckdb_path:
+        mtime = _safe_mtime(duckdb_path)
+        try:
+            rows = _load_duckdb_cached(duckdb_path, mtime)
+            if rows:
+                return rows, _index_duckdb_cached(duckdb_path, mtime)
+        except Exception:  # noqa: BLE001
+            pass
+    csv_path = str(path or default_path())
+    mtime = _safe_mtime(csv_path)
+    rows = _load_csv_cached(csv_path, mtime)
+    return rows, _index_csv_cached(csv_path, mtime)
 
 
 def load_active_market_value(
     path: str | None = None,
     duckdb_path: str | None = None,
 ) -> list[ActiveMarketValuePoint]:
-    """加载 0AMV 日线数据（带缓存）。
+    """加载 0AMV 日线数据（按 (path, mtime) 缓存，文件变更自动失效）。
 
     优先 DuckDB（active_market_value 表），未提供 DuckDB 或表为空时使用 CSV。
 
     Args:
-        path: CSV 路径；None 使用项目默认路径。
+        path: CSV 路径；None 使用项目默认路径（优先 DATA_DIR）。
         duckdb_path: DuckDB 数据库路径；提供时优先从 DuckDB 读取。
 
     Returns:
@@ -136,13 +212,15 @@ def load_active_market_value(
     """
     if duckdb_path:
         try:
-            rows = _load_duckdb_cached(duckdb_path)
+            mtime = _safe_mtime(duckdb_path)
+            rows = _load_duckdb_cached(duckdb_path, mtime)
             if rows:
                 return rows
         except Exception:  # noqa: BLE001
             # DuckDB 表不存在或读取失败时回退 CSV
             pass
-    return _load_csv_cached(str(path or default_path()))
+    csv_path = str(path or default_path())
+    return _load_csv_cached(csv_path, _safe_mtime(csv_path))
 
 
 def _normalize_query_date(date: str) -> str:
@@ -159,7 +237,7 @@ def get_active_market_value(
     duckdb_path: str | None = None,
 ) -> ActiveMarketValuePoint | None:
     """获取指定日期或最新一日的活跃市值数据。"""
-    rows = load_active_market_value(path, duckdb_path)
+    rows, index = _load_index_and_rows(path, duckdb_path)
     if not rows:
         return None
 
@@ -167,10 +245,7 @@ def get_active_market_value(
         return rows[-1]
 
     target = _normalize_query_date(date)
-    for row in rows:
-        if row.date == target:
-            return row
-    return None
+    return index.get(target)
 
 
 def get_active_market_signal(
@@ -219,7 +294,7 @@ def get_active_market_gate(
     Returns:
         OPEN / WAIT / CLEAR
     """
-    rows = load_active_market_value(path, duckdb_path)
+    rows, index = _load_index_and_rows(path, duckdb_path)
     if not rows:
         return "WAIT"
 
@@ -227,9 +302,11 @@ def get_active_market_gate(
         idx = len(rows) - 1
     else:
         target = _normalize_query_date(date)
-        idx = next((i for i, r in enumerate(rows) if r.date == target), -1)
-        if idx < 0:
+        # index 是 date→point 的 O(1) 字典，先验证存在；rows 本身 date-asc，
+        # 用 bisect 把 target → idx 走 O(log n)，替代原来的 O(n) 线性扫描
+        if target not in index:
             return "WAIT"
+        idx = bisect.bisect_left([r.date for r in rows], target)
 
     point = rows[idx]
     cum = _cum_pct(rows, idx, open_lookback)
@@ -256,6 +333,62 @@ def format_active_market_value(point: ActiveMarketValuePoint) -> str:
         f"日环比: {point.pct_chg:+.2f}%\n"
         f"信号: {signal_text}"
     )
+
+
+class GateAction(Enum):
+    """活跃市值全局闸门动作（v4.3+ 统一闸门 API 返回值）。
+
+    - OPEN  - 允许开新仓
+    - WAIT  - 观望（不开新仓、不平仓）
+    - CLEAR - 强平（清仓所有/当前持仓）
+    """
+
+    OPEN = "OPEN"
+    WAIT = "WAIT"
+    CLEAR = "CLEAR"
+
+
+def apply_active_mv_gate(
+    date: str,
+    *,
+    enabled: bool = True,
+    duckdb_path: Optional[str] = None,
+    path: Optional[str] = None,
+) -> GateAction:
+    """活跃市值全局闸门统一入口（v4.3+ 替代各 engine 自己的 _gate 实现）。
+
+    规则：
+    - enabled=False：返回 OPEN（闸门关闭，不限制任何行为）
+    - enabled=True：调 get_active_market_gate 把字符串映射为 GateAction 枚举
+      - 任何映射失败/异常：返回 WAIT（保守：不开新仓、不强平），不抛异常阻断回测
+
+    Args:
+        date: YYYYMMDD 或 YYYY-MM-DD 格式交易日
+        enabled: 是否启用闸门；False 等价于"闸门不存在"
+        duckdb_path: 优先 DuckDB 路径
+        path: 备选 CSV 路径
+
+    Returns:
+        GateAction 枚举值（OPEN / WAIT / CLEAR），调用方按需解释
+
+    Note:
+        各 backtest engine（B1B2 / Portfolio）应在自己的循环里调本函数，
+        拿到 GateAction 后决定：WAIT 跳过开仓、CLEAR 触发自己的强平逻辑。
+        强平 scope（当前持仓 vs 所有持仓）由各 engine 自己决定，因为单股 vs 组合
+        上下文不同。
+    """
+    if not enabled:
+        return GateAction.OPEN
+    try:
+        gate_str = get_active_market_gate(date, duckdb_path=duckdb_path, path=path)
+    except Exception:  # noqa: BLE001
+        # 闸门查询失败时保守返回 WAIT,不让异常阻断回测主流程
+        return GateAction.WAIT
+    return {
+        "OPEN": GateAction.OPEN,
+        "WAIT": GateAction.WAIT,
+        "CLEAR": GateAction.CLEAR,
+    }.get(gate_str, GateAction.WAIT)
 
 
 def import_0amv_csv_to_duckdb(csv_path: str, duckdb_path: str) -> int:
