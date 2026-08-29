@@ -202,7 +202,7 @@ def _run_single_stock_backtest(
                         cli_dict = rust_single_result_to_cli_dict(ts_code, rust_result)
                         return StockResult(
                             ts_code=ts_code,
-                            name=getattr(rust_result, "name", ""),
+                            name=rust_result.get("name", ""),
                             trades=cli_dict["total_trades"],
                             win_rate=cli_dict["win_rate"],
                             return_pct=cli_dict["total_return"] / 100.0,

@@ -62,19 +62,19 @@ DB_PATH = _db_path.resolve()
 
 
 def get_db_path() -> Path:
-    """获取数据库路径（每次调用时动态读取 DB_PATH 环境变量）"""
+    """获取数据库路径（每次调用时动态读取 DB_PATH 环境变量；纯 getter，无 mkdir 副作用）"""
     path_str = os.getenv("DB_PATH", "data/stock_data.db")
     path = Path(path_str)
     if not path.is_absolute():
         path = Path(__file__).parent.parent / path_str
-    path = path.resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
+    return path.resolve()
 
 
 def get_db_connection() -> sqlite3.Connection:
-    """获取数据库连接（动态读取 DB_PATH 环境变量）"""
-    conn = sqlite3.connect(get_db_path())
+    """获取数据库连接（动态读取 DB_PATH 环境变量；确保父目录存在）"""
+    path = get_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
 

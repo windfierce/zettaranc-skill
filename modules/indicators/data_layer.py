@@ -67,6 +67,9 @@ except ImportError:
 
 # dotenv 加载已移至 modules/__init__.py（包级别一次性加载）
 
+# hoist：避免每次缓存行加载时重建枚举值列表
+_TRADE_SIGNAL_VALUES = {e.value for e in TradeSignal}
+
 # 指标缓存层（内存 + SQLite）
 _indicator_memory_cache: dict[tuple[str, str], IndicatorResult] = {}
 
@@ -146,7 +149,7 @@ def _load_from_row(row) -> IndicatorResult:
     for f in _STR_FIELDS:
         kw[f] = row[f] or ""
     sig_val = row["signal"]
-    kw["signal"] = TradeSignal(sig_val) if sig_val and sig_val in [e.value for e in TradeSignal] else TradeSignal.WATCH
+    kw["signal"] = TradeSignal(sig_val) if sig_val and sig_val in _TRADE_SIGNAL_VALUES else TradeSignal.WATCH
     return IndicatorResult(**kw)
 
 

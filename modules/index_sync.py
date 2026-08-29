@@ -39,9 +39,9 @@ def _parse_trade_date(value: Any) -> Any:
 
 def sync_indices_to_duckdb(
     duckdb_path: str,
-    index_codes: Optional[list[str]] = None,
-    start_date: Optional[str] = "20160101",
-    end_date: Optional[str] = None,
+    index_codes: list[str] | None = None,
+    start_date: str | None = "20160101",
+    end_date: str | None = None,
     datasource: Any = None,
 ) -> dict[str, Any]:
     """通过 hithink 把主要指数日线同步到 DuckDB。

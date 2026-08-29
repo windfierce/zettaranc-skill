@@ -106,17 +106,6 @@ class IndevsClient:
     def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
         self.api_key = api_key or INDEVS_API_KEY
         self.base_url = (base_url or INDEVS_API_URL).rstrip("/")
-        self._session = requests.Session()
-        self._session.headers.update(
-            {
-                "X-API-Key": self.api_key,
-                "Accept": "application/json",
-                "Accept-Encoding": "gzip",
-                "User-Agent": "zettaranc-skill-indevs/1.0",
-            }
-        )
-        self._session.trust_env = False
-        self._session.proxies.update({"http": "", "https": ""})
         self._min_interval = 0.5
         self._last_request_time = 0.0
         _install_dns_fallback()

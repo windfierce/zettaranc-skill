@@ -54,11 +54,11 @@ def _run_stock_klines(
     klines: list[DailyData],
     config: B1B2Config,
     loop_config: LoopConfig,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     active_mv_enabled: bool = False,
-    active_mv_duckdb_path: Optional[str] = None,
-    active_mv_path: Optional[str] = None,
+    active_mv_duckdb_path: str | None = None,
+    active_mv_path: str | None = None,
 ) -> list[LoopTrade]:
     """对单只股票的 K 线运行 B1+B2 策略，返回完成交易列表。
 
@@ -173,11 +173,11 @@ def _run_stock_klines(
 def run_b1_b2_single(
     ts_code: str,
     days: int = 500,
-    config: Optional[B1B2Config] = None,
-    loop_config: Optional[LoopConfig] = None,
+    config: B1B2Config | None = None,
+    loop_config: LoopConfig | None = None,
     active_mv_enabled: bool = False,
-    active_mv_duckdb_path: Optional[str] = None,
-    active_mv_path: Optional[str] = None,
+    active_mv_duckdb_path: str | None = None,
+    active_mv_path: str | None = None,
 ) -> ShaofuBacktestResult:
     """单只股票 B1+B2 策略回测。"""
     cfg = config or B1B2Config()
@@ -231,11 +231,11 @@ def _aggregate_pool(results: list[ShaofuBacktestResult], ts_codes: list[str]) ->
 def run_b1_b2_pool(
     ts_codes: list[str],
     days: int = 500,
-    config: Optional[B1B2Config] = None,
-    loop_config: Optional[LoopConfig] = None,
+    config: B1B2Config | None = None,
+    loop_config: LoopConfig | None = None,
     active_mv_enabled: bool = False,
-    active_mv_duckdb_path: Optional[str] = None,
-    active_mv_path: Optional[str] = None,
+    active_mv_duckdb_path: str | None = None,
+    active_mv_path: str | None = None,
 ) -> B1B2PoolResult:
     """多只股票 B1+B2 策略回测。"""
     cfg = config or B1B2Config()
@@ -267,11 +267,11 @@ def run_b1_b2_walkforward(
     days: int = 800,
     folds: int = 4,
     window: int = 120,
-    config: Optional[B1B2Config] = None,
-    loop_config: Optional[LoopConfig] = None,
+    config: B1B2Config | None = None,
+    loop_config: LoopConfig | None = None,
     active_mv_enabled: bool = False,
-    active_mv_duckdb_path: Optional[str] = None,
-    active_mv_path: Optional[str] = None,
+    active_mv_duckdb_path: str | None = None,
+    active_mv_path: str | None = None,
 ) -> dict[str, Any]:
     """滚动窗口 Walk-forward 验证。
 

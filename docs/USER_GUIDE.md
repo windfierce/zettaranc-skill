@@ -78,7 +78,7 @@ SKILL.md（LLM 角色层：Z 哥视角点评、多轮问诊、表达 DNA）
 
 | 层级 | 技术 |
 |------|------|
-| 数据管道 | Python 3.10+（标准库 + sqlite3 + pathlib + dataclasses + enum） |
+| 数据管道 | Python 3.12+（标准库 + sqlite3 + pathlib + dataclasses + enum） |
 | 外部数据 | tushare Pro API（中转地址从 `TUSHARE_API_URL` 环境变量读取，不硬编码） |
 | 可选数据源 | Indevs Tushare Replay API（需 `INDEVS_API_KEY`） |
 | 数据库 | SQLite（本地文件，15 张表 + 索引） |
@@ -1414,7 +1414,7 @@ Tushare 官方 stk_factor 指标缓存（macd_dif、rsi_6、kdj_k、boll_mid 等
 
 ## 附录 C：开发规范
 
-- 所有脚本使用 Python 3.10+
+- 所有脚本使用 Python 3.12+
 - 中文注释和文档字符串
 - 编辑器使用 `.editorconfig` 配置（Python 4 空格缩进）
 - 数据库路径统一从 `DB_PATH` 环境变量读取

@@ -33,16 +33,19 @@ def is_rust_available() -> bool:
 
     try:
         return get_compute_module() is not None
-    except RuntimeError:
-        # rust 模式下 import 失败被转成 RuntimeError；CLI 视角等价于"不可用"
+    except (RuntimeError, ValueError):
+        # rust 模式下 import 失败被转成 RuntimeError；非法 ZETTARANC_BACKTEST_IMPL
+        # 抛 ValueError；CLI 视角二者等价于"不可用"，应 silent fallback 到 Python。
         return False
 
 
 def try_call(name: str, *args: Any, **kwargs: Any) -> Any:
     """尝试调 `_core_compute.<name>(*args, **kwargs)`。
 
-    返回：Rust 调用返回值，或 None（不可用 / 抛错）。
-    用法：业务层 `result = try_call(...) or python_fallback(...)`。
+    返回：Rust 调用返回值，或 None（不可用 / 抛错 / Rust 返回 None）。
+    用法：业务层 `result = try_call(...); if result is not None: use_it() else: python_fallback(...)`。
+    注意：**不要**用 `try_call(...) or python_fallback(...)` —— Rust 成功但返回
+    falsy 值（0 / 空 dict / 空列表）时会被 `or` 误判为失败，静默降级到 Python。
     """
     fn_obj = compute_func(name)
     if fn_obj is None:
@@ -120,13 +123,16 @@ def rust_single_result_to_cli_dict(ts_code: str, rust_result: dict) -> dict:
     trades_raw = rust_result.get("trades", []) or []
 
     total = len(trades_raw)
-    wins = [t for t in trades_raw if (t.get("pnl", 0.0) or 0.0) > 0]
-    losses = [t for t in trades_raw if (t.get("pnl", 0.0) or 0.0) < 0]
+    # 干净化：统一用 return（分数）做涨跌分类与 avg_pnl/max_win/max_loss；
+    # pnl（美元）仅用于 profit_factor（美元盈亏比）。二者符号一致
+    # （return=(exit-entry)/entry, pnl=(exit-entry)*position 且 position>0），无行为变化。
+    returns = [t.get("return", 0.0) or 0.0 for t in trades_raw]
+    wins = [t for t in trades_raw if (t.get("return", 0.0) or 0.0) > 0]
+    losses = [t for t in trades_raw if (t.get("return", 0.0) or 0.0) < 0]
 
-    pnls = [t.get("return", 0.0) or 0.0 for t in trades_raw]
-    avg_pnl = (sum(pnls) / total) if total else 0.0
-    max_win = max(pnls) if pnls else 0.0
-    max_loss = min(pnls) if pnls else 0.0
+    avg_pnl = (sum(returns) / total) if total else 0.0
+    max_win = max(returns) if returns else 0.0
+    max_loss = min(returns) if returns else 0.0
 
     win_sum = sum(t.get("pnl", 0.0) or 0.0 for t in wins)
     loss_sum = abs(sum(t.get("pnl", 0.0) or 0.0 for t in losses))

@@ -6,6 +6,7 @@ Tushare Data Bridge 客户端
 import json
 import logging
 import os
+import time
 import urllib.request
 import urllib.error
 from typing import Any, Optional
@@ -55,6 +56,22 @@ def set_bridge_config(**kwargs) -> None:
         timeout=kwargs.get("timeout", current.timeout),
         enabled=kwargs.get("enabled", current.enabled),
     )
+    # 配置变更 -> 失效健康缓存，避免测试切换 enabled 后读到旧值
+    reset_bridge_health_cache()
+
+
+# ========== 健康检查 memo（短 TTL）==========
+_bridge_health_cache: dict[tuple, tuple[float, bool]] = {}
+_BRIDGE_HEALTH_TTL = 30.0
+
+
+def _bridge_health_key(cfg: BridgeConfig) -> tuple:
+    return (cfg.host, cfg.port, cfg.timeout, cfg.enabled)
+
+
+def reset_bridge_health_cache() -> None:
+    """清空 bridge 健康检查缓存（测试隔离/配置变更用）。"""
+    _bridge_health_cache.clear()
 
 
 # ========== 低层 HTTP 调用 ==========
@@ -106,9 +123,15 @@ def is_bridge_available(config: BridgeConfig | None = None) -> bool:
         # 即使 health 失败也认为可用（可能只是 health 端点问题）
         return True
 
+    # auto：带 TTL 的 memo，避免每次调用都探活 /health
+    key = _bridge_health_key(cfg)
+    now = time.time()
+    cached = _bridge_health_cache.get(key)
+    if cached is not None and now - cached[0] < _BRIDGE_HEALTH_TTL:
+        return cached[1]
     try:
         resp = _http_get("/health", config=cfg)
-        return resp.get("status") == "ok"
+        ok = resp.get("status") == "ok"
     except (
         urllib.error.URLError,
         urllib.error.HTTPError,
@@ -119,7 +142,10 @@ def is_bridge_available(config: BridgeConfig | None = None) -> bool:
     ) as e:
         # 窄化：仅捕获 URL / 超时 / OS / JSON 异常，健康检查失败返回 False
         logger.warning("[bridge_client] is_bridge_available 健康检查失败: %s", e)
+        _bridge_health_cache[key] = (now, False)
         return False
+    _bridge_health_cache[key] = (now, ok)
+    return ok
 
 
 # ========== 数据查询接口 ==========

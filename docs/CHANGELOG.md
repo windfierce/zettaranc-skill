@@ -2,6 +2,37 @@
 
 所有值得记录的变更都会写在这里。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## v4.3.0 (2026-08-29) — 量化稳定性与效率提升 + 市场择时/指数同步
+
+### 新增
+
+- 新增**市场择时**（`market_timing.py`）、**0AMV 活跃市值全局闸门**（`active_market_value.py`）、**指数同步**（`index_sync.py`）、**B1 观察 + B2 确认策略**（`b1_b2_confirm.py`、`b1_b2_backtest.py`）。
+
+### 修复
+
+- **Python 回测指标 100x 放大**：`avg_pnl/max_win/max_loss/pnl_pct` 对已是百分比的值再 ×100 导致 Rust/Python 两路径产物不一致 → 删除多余 `×100`，口径统一为百分比（`total_return/max_drawdown` 为分数保留 `×100`）。
+- `verify/pipeline` Rust 路径 `getattr(dict,'name')` 恒空 → `.get("name","")`。
+- `is_rust_available` 未捕获非法 `ZETTARANC_BACKTEST_IMPL` 抛出的 `ValueError` → 捕获并静默降级。
+- `cmd_track` 6 处裸 `print(json.dumps(...))` 绕过共享 `_json_output` 且缺 `default=str` → 统一走 `_json_output`。
+- 删除被同名包遮蔽的死 shim（`data_sync.py` / `screener.py`）、重复的 `__main__` parser、死 flag（`backtest portfolio --mode` / `multi --strategy`）。
+- 清理 `indevs_client` 死 `requests.Session()`、`volume_patterns` no-op 表达式、`data_layer` 每行重建 `[e.value for e in TradeSignal]`（hoist 为模块级 set）。
+- `try_call` 文档语义修正：`try_call(...) or fallback(...)` 会在 Rust 成功返回 falsy（0/空 dict/[]）时误降级 → 改为 `if result is not None` 语义。
+- `rust_single_result_to_cli_dict` 统一用 `return`（分数）做涨跌分类与 `avg_pnl/max_win/max_loss`，`pnl`（美元）仅用于 `profit_factor`（行为不变，消除字段混用）。
+
+### 性能
+
+- **KDJ/BBI 惰性预计算**（与原实现逐位等值，已实证）：`detect_trade_signal` B2 分支对 `klines[:-i]` 重算 KDJ 8 次（O(n·8)）→ 一次 `precompute_kdj_sequence` + 索引；`_get_kdj/_get_bbi` 前缀切片重算 → precompute + `if None` 守卫（不覆盖调用方预设值）。MACD 非前缀一致 → `_get_macd_dif` 保留原算法。
+- `detect_all_strategies` 每轮 `daily_klines[:i+1]` 切片刻（O(n²)）→ 增长前缀（`detect_kirin_stage` 只读不 mutation）。
+- `detect_all_strategies` 新增 `klines=` 可选参数；`_analyze_core` 以 `strategies.get_kline_data` 单取数源透传（wave/kirin 逐条等值验证），并复用已构造 `daily_klines` 给 `screener_analyze`。
+- 数据源：优先级链 3 处重复 if/elif 级联 → 单一 `_sources_for_preferred()`；`get_kline_dicts_batch` N+1 次 SELECT → 单条 `IN` + Python 分组截断（真实 DB 逐股对照全等）；`get_db_path` 每次 `mkdir` → 挪到 `get_db_connection`。
+- `get_compute_module` 缓存改为 **env 感知**（`ZETTARANC_BACKTEST_IMPL` 中途改变自动失效）；bridge `/health` 加 30s TTL memo（`set_bridge_config` 与测试夹具清缓存）。
+
+### 测试与质量
+
+- 全量回归 **1453 passed, 16 skipped**。
+- `ruff check modules tests` 全过（清除 48 处 W292 文件末尾缺换行）。
+- 文档：Python 版本口径 `3.10+` → `3.12+`（README badge / `USER_GUIDE`），README 测试数 badge 同步为 `1453 passed | 16 skipped`。
+
 ## v4.2.0 (2026-08-22) — 同花顺官方数据源接入（hithink-finance）
 
 > **「v4.2.0：配置一个 Key，默认数据源即可切到同花顺官方 A 股数据服务」**

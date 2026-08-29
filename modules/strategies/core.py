@@ -202,26 +202,40 @@ def _calc_bbi(klines: list[dict]) -> float:
 
 
 def _get_kdj(klines: list[DailyData], index: int) -> tuple[float, float, float]:
-    """获取 KDJ，有属性直接读取，无属性则动态计算并缓存"""
+    """获取 KDJ，有属性直接读取，无属性则整段预计算一次并索引（只补未设过的属性）。
+
+    precompute_kdj_sequence[m] 与 calculate_kdj(klines[:m+1]) 逐位等值（已实证），
+    用整段预计算 + 索引替代每次前缀切片重算；用 is-None 守卫避免覆盖调用方手工设定的值。
+    """
     today = klines[index]
     if getattr(today, "kdj_j", None) is not None:
         return today.kdj_k or 0.0, today.kdj_d or 0.0, today.kdj_j or 0.0
-    from ..indicators import calculate_kdj
+    from ..indicators import precompute_kdj_sequence
 
-    k, d, j = calculate_kdj(klines[: index + 1])
-    today.kdj_k, today.kdj_d, today.kdj_j = k, d, j
+    kdj_sequence = precompute_kdj_sequence(klines)
+    if index >= len(kdj_sequence):
+        return 0.0, 0.0, 0.0
+    k, d, j = kdj_sequence[index]
+    for i, (kk, dd, jj) in enumerate(kdj_sequence):
+        if getattr(klines[i], "kdj_j", None) is None:
+            klines[i].kdj_k, klines[i].kdj_d, klines[i].kdj_j = kk, dd, jj
     return k, d, j
 
 
 def _get_bbi(klines: list[DailyData], index: int) -> float:
-    """获取 BBI，有属性直接读取，无属性则动态计算并缓存"""
+    """获取 BBI，有属性直接读取，无属性则整段预计算一次并索引（只补未设过的属性）。"""
     today = klines[index]
     if getattr(today, "bbi", None) is not None:
         return today.bbi or 0.0
-    from ..indicators import calculate_bbi
+    from ..indicators import precompute_bbi_sequence
 
-    bbi = calculate_bbi(klines[: index + 1])
-    today.bbi = bbi
+    bbi_sequence = precompute_bbi_sequence(klines)
+    if index >= len(bbi_sequence):
+        return 0.0
+    bbi = bbi_sequence[index]
+    for i, b in enumerate(bbi_sequence):
+        if getattr(klines[i], "bbi", None) is None:
+            klines[i].bbi = b
     return bbi
 
 

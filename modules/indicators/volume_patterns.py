@@ -10,6 +10,7 @@ from .core import (
     calculate_ma,
     calculate_bbi,
     calculate_kdj,
+    precompute_kdj_sequence,
     calculate_macd,
     calculate_vol_ratio,
 )
@@ -168,10 +169,10 @@ def detect_trade_signal(klines: list[DailyData]) -> TradeSignal:
     today = klines[-1]
     yesterday = klines[-2]
 
-    # 计算当前指标
-    k, d, j = calculate_kdj(klines)
+    # 计算当前指标（kdj_seq[m] 与 calculate_kdj(klines[:m+1]) 逐位等值，已实证）
+    kdj_seq = precompute_kdj_sequence(klines)
+    k, d, j = kdj_seq[-1]
     dif_list, dea_list, macd_list = calculate_macd(klines)
-    macd_list[-1] if macd_list else 0
 
     # MACD 语料判断
     macd_signals = {}
@@ -208,10 +209,9 @@ def detect_trade_signal(klines: list[DailyData]) -> TradeSignal:
 
     # B2: B1后放量确认
     if j > -10 and j < 55:
-        prev_j_list = []
-        for i in range(2, min(10, len(klines))):
-            pk, pd, pj = calculate_kdj(klines[:-i])
-            prev_j_list.append(pj)
+        n_klines = len(klines)
+        # kdj_seq[n-i-1][2] == calculate_kdj(klines[:-i])[2]（KDJ 前缀一致，已实证等值）
+        prev_j_list = [kdj_seq[n_klines - i - 1][2] for i in range(2, min(10, n_klines))]
 
         if any(pj < -10 for pj in prev_j_list):
             if today.pct_chg > 4 and vol_pattern["is_beidou"]:

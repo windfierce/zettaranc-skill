@@ -37,6 +37,10 @@ def mock_env_for_tests():
             ):
                 del os.environ[key]
         os.environ.update(env_vars)
+        # 每次测试清空 bridge 健康缓存，隔离 patch _http_get 的 auto 测试（不触发 set_bridge_config）
+        from modules import bridge_client
+
+        bridge_client.reset_bridge_health_cache()
         yield db_path
 
 

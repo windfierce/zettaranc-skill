@@ -98,8 +98,8 @@ class PortfolioConfig:
     min_composite_score: float = 0.3
     # 活跃市值（0AMV）全局闸门：OPEN 才允许开仓，CLEAR 强制清仓
     active_mv_enabled: bool = False
-    active_mv_duckdb_path: Optional[str] = None
-    active_mv_path: Optional[str] = None
+    active_mv_duckdb_path: str | None = None
+    active_mv_path: str | None = None
     # v3.10.0：按市场环境分组的策略权重（键: STRONG / NEUTRAL / WEAK）
     # 若某环境未配置则退回 strategy_weights
     regime_strategy_weights: dict[str, dict[str, float]] = field(

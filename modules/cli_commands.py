@@ -7,10 +7,10 @@ CLI 扩展命令模块（待集成到 cli.py）
   - trade     : 交易记录的增删查改 + 复盘
   - daily     : 每日五步工作流（观察池 + 选股 + 持仓检查 + 信号汇总 + 报告）
 
-用法示例：
-    python -m modules.cli_commands backtest shaofu 600487.SH --days 250 --json
-    python -m modules.cli_commands trade add "4月25号买了100股茅台，1800块"
-    python -m modules.cli_commands daily --json
+用法示例（canonical CLI 入口为 `modules.cli`，本模块只提供命令实现）：
+    python -m modules.cli backtest shaofu 600487.SH --days 250 --json
+    python -m modules.cli trade add "4月25号买了100股茅台，1800块"
+    python -m modules.cli daily --json
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def _shaofu_result_to_dict(result: Any) -> dict:
                 "exit_date": t.exit_date,
                 "exit_price": t.exit_price,
                 "exit_reason": t.exit_reason,
-                "pnl_pct": round(t.pnl_pct * 100, 2),  # 转为百分比数值
+                "pnl_pct": round(t.pnl_pct, 2),  # pnl_pct 已是百分比数值
                 "holding_days": t.holding_days,
             }
         )
@@ -80,9 +80,9 @@ def _shaofu_result_to_dict(result: Any) -> dict:
         "total_trades": result.total_trades,
         "win_count": result.win_count,
         "win_rate": round(result.win_rate, 3),
-        "avg_pnl": round(result.avg_pnl * 100, 2),
-        "max_win": round(result.max_win * 100, 2),
-        "max_loss": round(result.max_loss * 100, 2),
+        "avg_pnl": round(result.avg_pnl, 2),
+        "max_win": round(result.max_win, 2),
+        "max_loss": round(result.max_loss, 2),
         "profit_factor": round(result.profit_factor, 2),
         "total_return": round(result.total_return * 100, 2),
         "max_drawdown": round(result.max_drawdown * 100, 2),
@@ -108,7 +108,7 @@ def _portfolio_result_to_dict(result: Any) -> dict:
                 "exit_date": t.exit_date,
                 "exit_price": round(t.exit_price, 2) if t.exit_price else None,
                 "exit_reason": t.exit_reason,
-                "pnl_pct": round(t.pnl_pct * 100, 2),
+                "pnl_pct": round(t.pnl_pct, 2),
             }
         )
 
@@ -1158,120 +1158,3 @@ def add_verify_v10_parser(subparsers) -> None:
     p_verify.add_argument("--json", action="store_true")
     p_verify.add_argument("--no-markdown", action="store_true")
     p_verify.set_defaults(func=cmd_verify_v10)
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Z哥量化工具 CLI 扩展命令",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  python -m modules.cli_commands backtest shaofu 600487.SH --days 250 --json
-  python -m modules.cli_commands backtest multi 600487.SH --days 120 --json
-  python -m modules.cli_commands backtest portfolio 600487.SH,601318.SH --days 120 --json
-  python -m modules.cli_commands trade add "4月25号买了100股茅台，1800块"
-  python -m modules.cli_commands trade list --json
-  python -m modules.cli_commands trade review --json
-  python -m modules.cli_commands trade stats --json
-  python -m modules.cli_commands daily --json
-  python -m modules.cli_commands simulate 600487.SH --days 250 --json
-        """,
-    )
-    subparsers = parser.add_subparsers(dest="command", help="子命令", required=True)
-
-    # ── backtest ──
-    p_bt = subparsers.add_parser("backtest", help="回测（shaofu / multi / portfolio / b2-confirm）")
-    p_bt.add_argument(
-        "backtest_sub",
-        choices=["shaofu", "multi", "portfolio", "b2-confirm"],
-        help="回测类型",
-    )
-    p_bt.add_argument("ts_code", nargs="?", help="股票代码（shaofu/multi/b2-confirm 单股必填）")
-    p_bt.add_argument("codes", nargs="?", help="股票代码列表（portfolio/b2-confirm 用，逗号分隔）")
-    p_bt.add_argument("--days", type=int, default=500, help="回测天数（b2-confirm 默认 500）")
-    p_bt.add_argument("--json", action="store_true", help="JSON 输出")
-    p_bt.add_argument("--strategy", default=None, help="策略过滤（暂保留）")
-    # b2-confirm 参数
-    p_bt.add_argument("--b2-min-pct", type=float, default=4.0, help="B2 涨幅阈值（默认 4.0）")
-    p_bt.add_argument("--b2-min-vol", type=float, default=2.0, help="B2 量比阈值（默认 2.0）")
-    p_bt.add_argument("--b2-j-max", type=float, default=55.0, help="B2 当日 J 值上限（默认 55）")
-    p_bt.add_argument("--b1-j-threshold", type=float, default=-10.0, help="B1 J 值阈值（默认 -10）")
-    p_bt.add_argument("--observe-min", type=int, default=3, help="观察窗口起点（默认 3）")
-    p_bt.add_argument("--observe-max", type=int, default=5, help="观察窗口终点（默认 5）")
-    p_bt.add_argument("--max-gap-open-pct", type=float, default=5.0, help="次日高开过滤（默认 5，100 表示关闭）")
-    p_bt.add_argument("--stop-loss-pct", type=float, default=-0.05, help="止损比例（默认 -0.05）")
-    p_bt.add_argument("--bbi-days", type=int, default=2, help="BBI 连续跌破天数（默认 2）")
-    p_bt.add_argument("--min-hold", type=int, default=2, help="最少持仓天数（默认 2）")
-    p_bt.add_argument("--walk-forward", action="store_true", help="运行 Walk-forward 样本外验证")
-    p_bt.add_argument("--folds", type=int, default=4, help="Walk-forward 折数（默认 4）")
-    p_bt.add_argument("--window", type=int, default=120, help="Walk-forward 单窗口交易日数（默认 120）")
-    p_bt.add_argument("--active-mv-gate", action="store_true", help="启用活跃市值全局闸门")
-    p_bt.add_argument("--active-mv-duckdb", default=None, help="活跃市值 DuckDB 路径")
-    p_bt.add_argument("--active-mv-path", default=None, help="活跃市值 CSV 路径")
-
-    # ── trade ──
-    p_tr = subparsers.add_parser("trade", help="交易记录管理（add / list / review / stats）")
-    p_tr.add_argument("trade_sub", choices=["add", "list", "review", "stats"], help="操作")
-    p_tr.add_argument("text", nargs="?", help="交易描述（add 必填）")
-    p_tr.add_argument("--json", action="store_true", help="JSON 输出")
-    p_tr.add_argument("--limit", type=int, default=20, help="列出条数（list 用）")
-
-    # ── daily ──
-    p_dy = subparsers.add_parser("daily", help="每日工作流")
-    p_dy.add_argument("--json", action="store_true", help="JSON 输出")
-
-    # ── market（市场择时）──
-    p_market = subparsers.add_parser("market", help="市场择时指标")
-    p_market_sub = p_market.add_subparsers(dest="market_sub", required=True)
-    p_market_timing = p_market_sub.add_parser("timing", help="计算市场择时指标")
-    p_market_timing.add_argument("--date", default=None, help="交易日 YYYYMMDD，默认最新")
-    p_market_timing.add_argument("--index", default="000001.SH", help="大盘指数代码")
-    p_market_timing.add_argument("--days", type=int, default=120, help="指数 K 线回溯天数")
-    p_market_timing.add_argument("--duckdb", default=None, help="DuckDB 全市场数据库路径")
-    p_market_timing.add_argument("--json", action="store_true", help="JSON 输出")
-
-    # ── simulate ──
-    p_sim = subparsers.add_parser("simulate", help="端到端交易模拟回测（择时+选股+仓位+卖出）")
-    p_sim.add_argument("codes", nargs="?", help="股票代码，逗号分隔；省略则使用前 500 只")
-    p_sim.add_argument("--days", type=int, default=250, help="回测天数")
-    p_sim.add_argument("--capital", type=float, default=1_000_000, help="初始资金")
-    p_sim.add_argument("--max-positions", type=int, default=5, help="最大同时持仓")
-    p_sim.add_argument("--risk", type=float, default=0.02, help="单笔风险占净值比例")
-    p_sim.add_argument("--score", type=float, default=70.0, help="入选信号最低综合评分")
-    p_sim.add_argument("--signals", type=int, default=2, help="最小共振标签数")
-    p_sim.add_argument("--benchmark", type=str, default="000300.SH", help="基准指数代码")
-    p_sim.add_argument(
-        "--cost-model",
-        choices=["simple", "advanced"],
-        default="simple",
-        help="成本模型：simple=仅佣金，advanced=含印花税/过户费",
-    )
-    p_sim.add_argument("--slippage", choices=["fixed", "dynamic"], default="fixed", help="滑点模型")
-    p_sim.add_argument("--atr-sizing", action="store_true", help="启用 ATR 波动率仓位调整")
-    p_sim.add_argument("--max-position-pct", type=float, default=0.20, help="单票最大仓位占比")
-    p_sim.add_argument("--no-st", action="store_true", help="不允许交易 ST/*ST 股票")
-    p_sim.add_argument("--t1-lock", dest="t1_lock", action="store_true", default=True, help="启用 T+1 卖出锁定（默认）")
-    p_sim.add_argument("--no-t1-lock", dest="t1_lock", action="store_false", default=True, help="禁用 T+1 卖出锁定")
-    # v0.3 新增：战法共振模式参数
-    p_sim.add_argument("--strategy-mode", choices=["simple", "resonance"], default="simple", help="选股模式")
-    p_sim.add_argument("--strategy-lookback", type=int, default=5, help="战法信号回看交易日数")
-    p_sim.add_argument("--min-resonance-score", type=float, default=0.35, help="共振模式最低入选分")
-    p_sim.add_argument("--json", action="store_true", help="JSON 输出")
-
-    # ── verify ──
-    add_verify_v10_parser(subparsers)
-
-    args = parser.parse_args()
-
-    # 调度
-    handlers = {
-        "backtest": cmd_backtest,
-        "trade": cmd_trade,
-        "daily": cmd_daily,
-        "market": cmd_market_timing,
-        "simulate": cmd_simulate,
-        "verify": cmd_verify_v10,
-    }
-    handlers[args.command](args)

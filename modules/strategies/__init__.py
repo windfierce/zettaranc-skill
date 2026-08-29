@@ -74,18 +74,17 @@ def _post_process_signals(signals: list[StrategySignal]) -> list[StrategySignal]
     return filtered
 
 
-def detect_all_strategies(ts_code: str, days: int = 120) -> list[StrategySignal]:
+def detect_all_strategies(ts_code: str, days: int = 120, klines: list | None = None) -> list[StrategySignal]:
     """
     检测所有战法信号
 
     Args:
         ts_code: 股票代码
         days: 分析天数
-
-    Returns:
-        战法信号列表
+        klines: 已加载的 K 线（dict）；None 时内部取数
     """
-    klines = get_kline_data(ts_code, days)
+    if klines is None:
+        klines = get_kline_data(ts_code, days)
 
     if not klines:
         return []
@@ -122,9 +121,13 @@ def detect_all_strategies(ts_code: str, days: int = 120) -> list[StrategySignal]
     # 遍历每一天检测战法
     from ..indicators import detect_kirin_stage
 
+    # 用增长前缀替代每轮 [ : i + 1 ] 切片（detect_kirin_stage 只读不 mutation，
+    # 消除 O(n) 次列表复制；阶段重算本身为 O(prefix)，这里只消掉复制开销）
+    kirin_prefix = daily_klines[:20]
     for i in range(20, len(klines)):
-        # 获取当前切片的麒麟阶段 (Context)
-        kirin_context = detect_kirin_stage(daily_klines[: i + 1])
+        kirin_prefix.append(daily_klines[i])
+        # 获取当前前缀的麒麟阶段 (Context)
+        kirin_context = detect_kirin_stage(kirin_prefix)
 
         # B1 检测
         signal = detect_b1(daily_klines, i, kirin_context=kirin_context)

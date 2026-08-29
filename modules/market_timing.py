@@ -358,10 +358,10 @@ def _classify_regime(composite: float) -> str:
 
 
 def compute_market_timing(
-    trade_date: Optional[str] = None,
+    trade_date: str | None = None,
     index_code: str = "000001.SH",
     days: int = 120,
-    duckdb_path: Optional[str] = None,
+    duckdb_path: str | None = None,
 ) -> MarketTimingIndicators:
     """计算市场择时指标。
 

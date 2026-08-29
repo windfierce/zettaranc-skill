@@ -26,6 +26,7 @@ def detect_b1(klines: list[DailyData], index: int, kirin_context: dict | None = 
     - 主力大单净流入为正 (+10%)
     - RSI6 < 20 (极度超卖, +10%)
     - ADX 高位动能竭尽 (+10%)
+    - MACD 0轴之下底背离 (+15%)
     """
     if index < 10:
         return None
@@ -92,6 +93,12 @@ def detect_b1(klines: list[DailyData], index: int, kirin_context: dict | None = 
     if _safe_num(adx) > adx_floor:
         confidence += 0.10
         mdc_details.append(f"ADX高位动能竭尽({_safe_num(adx):.1f})")
+
+    # 8. MDC 验证 - MACD 0轴之下底背离 (中期动能衰竭+反转信号)
+    # detect_divergence 已保证 min_dif < 0（0轴之下），直接使用即可
+    if getattr(today, "is_bottom_divergence", False):
+        confidence += 0.15
+        mdc_details.append("MACD0轴下底背离(反转确认)")
 
     confidence = max(0.1, min(confidence, 0.98))
 

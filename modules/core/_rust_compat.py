@@ -40,6 +40,7 @@ def get_impl_choice() -> ImplChoice:
 
 _cached_module: ModuleType | None = None
 _cached_resolved: bool = False
+_cached_env_choice: ImplChoice | None = None
 
 
 def get_compute_module() -> ModuleType | None:
@@ -48,12 +49,20 @@ def get_compute_module() -> ModuleType | None:
     "auto" 模式下：成功导入返回模块，失败返回 None。
     "rust" 模式下：导入失败抛 RuntimeError。
     "python" 模式下：永远返回 None。
+
+    缓存是 env 感知的：若 ZETTARANC_BACKTEST_IMPL 中途改变（测试 monkeypatch 场景），
+    自动失效并重新解析，无需显式 reset_cache。
     """
-    global _cached_module, _cached_resolved
-    if _cached_resolved:
+    global _cached_module, _cached_resolved, _cached_env_choice
+    choice = get_impl_choice()
+    if _cached_resolved and _cached_env_choice == choice:
         return _cached_module
 
-    choice = get_impl_choice()
+    # env 改变或首次解析：重建缓存
+    _cached_env_choice = choice
+    _cached_resolved = False
+    _cached_module = None
+
     if choice == "python":
         _cached_module = None
         _cached_resolved = True
@@ -79,10 +88,11 @@ def get_compute_module() -> ModuleType | None:
 
 
 def reset_cache() -> None:
-    """测试用：清空模块缓存。"""
-    global _cached_module, _cached_resolved
+    """测试用：清空模块缓存（含 env 记录，强制下次重新解析）。"""
+    global _cached_module, _cached_resolved, _cached_env_choice
     _cached_module = None
     _cached_resolved = False
+    _cached_env_choice = None
 
 
 # ─────────────────────────────────────────────────────────────────────

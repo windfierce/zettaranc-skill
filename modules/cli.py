@@ -65,36 +65,39 @@ def _analyze_core(ts_code: str, days: int = 120) -> dict:
     cmd_analyze 和 cmd_score 共用此函数，避免重复计算。
     """
     from modules.indicators import analyze_stock
-    from modules.indicators.data_layer import get_kline_data, DailyData
+    from modules.indicators.data_layer import DailyData
     from modules.strategies import detect_all_strategies
+    from modules.strategies.core import get_kline_data as _strat_get_klines  # 返回 dict
     from modules.portfolio_diagnosis import diagnose_stock
     from modules.screener import analyze_stock as screener_analyze
 
     # 1. 指标分析
     result = analyze_stock(ts_code, days=days)
 
-    # 2. 主力阶段
+    # 2. 主力阶段（用 strategies.get_kline_data 的 dict 作为 step-2/3 共用源，避免重复取数）
     wave_data = None
     kirin_data = None
+    klines_dict: list[dict] | None = None
+    daily_klines: list[DailyData] | None = None  # 供 screener 复用
     try:
         from modules.indicators import detect_three_waves, detect_kirin_stage
 
-        klines = get_kline_data(ts_code, days=days)
-        if klines:
+        klines_dict = _strat_get_klines(ts_code, days=days)
+        if klines_dict:
             daily_klines = []
-            for i, k in enumerate(klines):
-                prev_close = klines[i - 1].close if i > 0 else k.close
+            for i, d in enumerate(klines_dict):
+                prev_close = klines_dict[i - 1]["close"] if i > 0 else d["close"]
                 daily_klines.append(
                     DailyData(
-                        ts_code=k.ts_code,
-                        trade_date=k.trade_date,
-                        open=k.open,
-                        high=k.high,
-                        low=k.low,
-                        close=k.close,
-                        vol=k.vol,
-                        amount=k.amount,
-                        pct_chg=k.pct_chg,
+                        ts_code=d["ts_code"],
+                        trade_date=d["trade_date"],
+                        open=d["open"],
+                        high=d["high"],
+                        low=d["low"],
+                        close=d["close"],
+                        vol=d["vol"],
+                        amount=d["amount"],
+                        pct_chg=d["pct_chg"],
                         prev_close=prev_close,
                     )
                 )
@@ -106,14 +109,14 @@ def _analyze_core(ts_code: str, days: int = 120) -> dict:
         wave_data = None
         kirin_data = None
 
-    # 3. 策略信号
-    signals = detect_all_strategies(ts_code, days=days)
+    # 3. 策略信号（复用 step-2 dict；klines_dict 为 None 时 detect_all_strategies 内部按 days 取数）
+    signals = detect_all_strategies(ts_code, days=days, klines=klines_dict)
 
     # 4. 诊断
     diagnosis = diagnose_stock(ts_code, days=days)
 
-    # 5. screener 评分（复用已有数据，不再重复拉取）
-    score = screener_analyze(ts_code)
+    # 5. screener 评分（复用 step-2 已构造的 daily_klines，不再重复拉取）
+    score = screener_analyze(ts_code, klines=daily_klines)
 
     return {
         "ts_code": ts_code,
@@ -604,7 +607,7 @@ def cmd_track(args) -> None:
             ts_code=args.ts_code, name=args.name, reason=args.reason, strategy_tags=args.strategy, notes=args.notes
         )
         if args.json:
-            print(json.dumps({"success": success}, ensure_ascii=False))
+            _json_output({"success": success})
 
     elif action == "remove":
         if not args.ts_code:
@@ -612,12 +615,12 @@ def cmd_track(args) -> None:
             return
         success = manager.remove_stock(ts_code=args.ts_code, reason=args.reason)
         if args.json:
-            print(json.dumps({"success": success}, ensure_ascii=False))
+            _json_output({"success": success})
 
     elif action == "list":
         stocks = manager.list_stocks(status=args.status, strategy_tag=args.strategy[0] if args.strategy else None)
         if args.json:
-            print(json.dumps(stocks, ensure_ascii=False, indent=2))
+            _json_output(stocks)
         else:
             if not stocks:
                 print("跟踪池为空")
@@ -639,7 +642,7 @@ def cmd_track(args) -> None:
             return
         stock_info: dict[str, Any] | None = manager.get_stock_info(args.ts_code)
         if args.json:
-            print(json.dumps(stock_info, ensure_ascii=False, indent=2) if stock_info else "{}")
+            _json_output(stock_info if stock_info else {})
         else:
             if not stock_info:
                 print(f"股票 {args.ts_code} 不在跟踪池中")
@@ -660,13 +663,13 @@ def cmd_track(args) -> None:
             return
         success = manager.update_stock_status(ts_code=args.ts_code, status=args.status, notes=args.notes)
         if args.json:
-            print(json.dumps({"success": success}, ensure_ascii=False))
+            _json_output({"success": success})
 
     elif action == "stats":
         stats = manager.get_tracking_stats()
         distribution = manager.get_strategy_distribution()
         if args.json:
-            print(json.dumps({"stats": stats, "distribution": distribution}, ensure_ascii=False, indent=2))
+            _json_output({"stats": stats, "distribution": distribution})
         else:
             print("\n跟踪池统计")
             print("-" * 40)
@@ -763,13 +766,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync_factor.add_argument("--days", type=int, default=365, help="同步天数")
 
     p_sync_index = p_sync_sub.add_parser("index", help="通过 hithink 同步主要指数日线到 DuckDB")
-    p_sync_index.add_argument("--duckdb", default=None, help="DuckDB 数据库路径（默认读 DUCKDB_PATH 或 data/market.duckdb）")
+    p_sync_index.add_argument(
+        "--duckdb", default=None, help="DuckDB 数据库路径（默认读 DUCKDB_PATH 或 data/market.duckdb）"
+    )
     p_sync_index.add_argument("--start", default="20160101", help="起始日期 YYYYMMDD")
     p_sync_index.add_argument("--end", default=None, help="结束日期 YYYYMMDD，默认今天")
     p_sync_index.add_argument("--codes", default=None, help="指数代码，逗号分隔；默认 6 个主要指数")
 
     p_sync_0amv = p_sync_sub.add_parser("0amv", help="把 0AMV 活跃市值 CSV 导入 DuckDB")
-    p_sync_0amv.add_argument("--duckdb", default=None, help="DuckDB 数据库路径（默认读 DUCKDB_PATH 或 data/market.duckdb）")
+    p_sync_0amv.add_argument(
+        "--duckdb", default=None, help="DuckDB 数据库路径（默认读 DUCKDB_PATH 或 data/market.duckdb）"
+    )
     p_sync_0amv.add_argument("--csv", default=None, help="0AMV CSV 路径（默认 data/0amv_active_market_value.csv）")
 
     # ── track（自我改进系统 - 跟踪池管理）──
@@ -797,7 +804,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_bt_multi = p_bt_sub.add_parser("multi", help="多策略融合回测")
     p_bt_multi.add_argument("ts_code", help="股票代码")
-    p_bt_multi.add_argument("--strategy", default="b1,b2", help="策略列表，逗号分隔")
     p_bt_multi.add_argument("--days", type=int, default=120, help="回测天数")
     p_bt_multi.add_argument("--json", action="store_true", help="JSON输出")
 
@@ -805,7 +811,6 @@ def build_parser() -> argparse.ArgumentParser:
     # 字段名 codes 与 cli_commands.cmd_backtest 中 getattr(args, "codes", ...) 对齐
     p_bt_portfolio.add_argument("codes", help="股票代码，逗号分隔")
     p_bt_portfolio.add_argument("--days", type=int, default=120, help="回测天数")
-    p_bt_portfolio.add_argument("--mode", choices=["shaofu", "multi"], default="shaofu", help="回测模式")
     p_bt_portfolio.add_argument("--json", action="store_true", help="JSON输出")
 
     # B1观察+B2确认策略回测（与 cli_commands.cmd_backtest 对齐）

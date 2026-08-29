@@ -578,25 +578,32 @@ class SqliteDataSource:
             # sqlite3.Row 构造开销大，批量场景下用裸元组 + zip 转 dict 更快
             conn.row_factory = None
             cursor = conn.cursor()
+            # 单条 IN 查询替代 N+1 次逐股 SELECT，语义与原逐股查询一致：
+            #   每只股票按 trade_date DESC 取最近 days 条（无 start_date 时），
+            #   含日期区间过滤；Python 端按 ts_code 分组 + 截断 + 反转为升序。
+            placeholders = ",".join("?" for _ in ts_codes)
+            params: list = list(ts_codes)
+            sql = f"""
+                SELECT ts_code, trade_date, open, high, low, close, vol, amount, pct_chg
+                FROM daily_kline
+                WHERE ts_code IN ({placeholders})
+            """
+            if start_date:
+                sql += " AND trade_date >= ?"
+                params.append(start_date)
+            if end_date:
+                sql += " AND trade_date <= ?"
+                params.append(end_date)
+            sql += " ORDER BY ts_code, trade_date DESC"
+            cursor.execute(sql, params)
+            per_code: dict[str, list[tuple]] = {}
+            for row in cursor.fetchall():
+                per_code.setdefault(row[0], []).append(row)
             for ts_code in ts_codes:
-                params: list = [ts_code]
-                sql = """
-                    SELECT ts_code, trade_date, open, high, low, close, vol, amount, pct_chg
-                    FROM daily_kline
-                    WHERE ts_code = ?
-                """
-                if start_date:
-                    sql += " AND trade_date >= ?"
-                    params.append(start_date)
-                if end_date:
-                    sql += " AND trade_date <= ?"
-                    params.append(end_date)
-                sql += " ORDER BY trade_date DESC"
+                rows = per_code.get(ts_code, [])
                 if not start_date and days > 0:
-                    sql += " LIMIT ?"
-                    params.append(days)
-                cursor.execute(sql, params)
-                result[ts_code] = [dict(zip(_KLINE_COLUMNS, row)) for row in reversed(cursor.fetchall())]
+                    rows = rows[:days]
+                result[ts_code] = [dict(zip(_KLINE_COLUMNS, row)) for row in reversed(rows)]
         return result
 
 
@@ -691,6 +698,25 @@ class CompositeDataSource:
             sources.append(preferred)
         sources.extend([self._a_stock_data_source, self._bridge, self._sqlite])
         return sources
+
+    def _sources_for_preferred(self) -> list[DataSource]:
+        """按 self._preferred 返回有序数据源列表；auto 复用 _auto_sources（token 感知）。"""
+        p = self._preferred
+        if p == "auto":
+            return self._auto_sources()
+        if p == "hithink":
+            return [self._hithink_source, self._a_stock_data_source, self._indevs_source, self._bridge, self._sqlite]
+        if p == "a-stock-data":
+            return [self._a_stock_data_source, self._indevs_source, self._bridge, self._sqlite]
+        if p == "bridge":
+            return [self._bridge]
+        if p == "sqlite":
+            return [self._sqlite]
+        if p == "tushare":
+            return [self._tushare_source]
+        if p == "indevs":
+            return [self._indevs_source]
+        return []
 
     def _auto_call(self, method: str, *args):
         """auto 模式按优先级链调用单项接口：先优先源（如有），失败后依次回退。
@@ -881,21 +907,7 @@ class CompositeDataSource:
 
     def get_stock_list(self, exchange: str | None = None) -> list[dict]:
         """获取股票列表（按交易所）"""
-        sources: list[DataSource] = []
-        if self._preferred == "auto":
-            sources = self._auto_sources()
-        elif self._preferred == "hithink":
-            sources = [self._hithink_source, self._a_stock_data_source, self._indevs_source, self._bridge, self._sqlite]
-        elif self._preferred == "a-stock-data":
-            sources = [self._a_stock_data_source, self._indevs_source, self._bridge, self._sqlite]
-        elif self._preferred == "bridge":
-            sources = [self._bridge]
-        elif self._preferred == "sqlite":
-            sources = [self._sqlite]
-        elif self._preferred == "tushare":
-            sources = [self._tushare_source]
-        elif self._preferred == "indevs":
-            sources = [self._indevs_source]
+        sources: list[DataSource] = self._sources_for_preferred()
 
         for source in sources:
             try:
@@ -964,21 +976,7 @@ class CompositeDataSource:
             return records
 
         # 2. DB 没有数据，调 API
-        sources: list[DataSource] = []
-        if self._preferred == "auto":
-            sources = self._auto_sources()
-        elif self._preferred == "hithink":
-            sources = [self._hithink_source, self._a_stock_data_source, self._indevs_source, self._bridge, self._sqlite]
-        elif self._preferred == "a-stock-data":
-            sources = [self._a_stock_data_source, self._indevs_source, self._bridge, self._sqlite]
-        elif self._preferred == "bridge":
-            sources = [self._bridge]
-        elif self._preferred == "sqlite":
-            sources = [self._sqlite]
-        elif self._preferred == "tushare":
-            sources = [self._tushare_source]
-        elif self._preferred == "indevs":
-            sources = [self._indevs_source]
+        sources: list[DataSource] = self._sources_for_preferred()
 
         for source in sources:
             try:

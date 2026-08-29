@@ -32,10 +32,10 @@ class B1B2Config:
     # B2 确认条件
     b2_min_pct: float = 4.0  # 当日涨幅下限（%）
     b2_min_vol_ratio: float = 2.0  # 当日量 / 前日量下限
-    b2_j_max: Optional[float] = 55.0  # B2 当日 J 值上限；None 表示不检查
+    b2_j_max: float | None = 55.0  # B2 当日 J 值上限；None 表示不检查
 
     # 次日高开过滤：B2 次日开盘较前一交易日收盘高开超过该百分比则放弃；None 关闭
-    max_gap_open_pct: Optional[float] = 5.0
+    max_gap_open_pct: float | None = 5.0
 
     def validate(self) -> None:
         """校验参数合法性。"""
@@ -51,7 +51,7 @@ class B1B2Config:
             raise ValueError("b2_j_max 必须 > 0 或 None")
 
 
-def has_b1_in_window(klines, index: int, config: Optional[B1B2Config] = None) -> bool:
+def has_b1_in_window(klines, index: int, config: B1B2Config | None = None) -> bool:
     """判断 index 当天往前 observe_min~observe_max 个交易日内是否存在 B1。
 
     B1 的量化简化定义：KDJ J 值 < b1_j_threshold。
@@ -67,7 +67,7 @@ def has_b1_in_window(klines, index: int, config: Optional[B1B2Config] = None) ->
     return False
 
 
-def is_b2_signal(klines, index: int, config: Optional[B1B2Config] = None) -> bool:
+def is_b2_signal(klines, index: int, config: B1B2Config | None = None) -> bool:
     """判断 index 当天是否为有效的 B2 确认信号。
 
     条件：
@@ -102,7 +102,7 @@ def is_high_open_skip(
     klines,
     b2_idx: int,
     entry_idx: int,
-    config: Optional[B1B2Config] = None,
+    config: B1B2Config | None = None,
 ) -> bool:
     """判断 B2 次日是否因高开过多而跳过。
 

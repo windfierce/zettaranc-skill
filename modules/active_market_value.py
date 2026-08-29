@@ -120,8 +120,8 @@ def _load_duckdb_cached(duckdb_path: str) -> list[ActiveMarketValuePoint]:
 
 
 def load_active_market_value(
-    path: Optional[str] = None,
-    duckdb_path: Optional[str] = None,
+    path: str | None = None,
+    duckdb_path: str | None = None,
 ) -> list[ActiveMarketValuePoint]:
     """加载 0AMV 日线数据（带缓存）。
 
@@ -154,9 +154,9 @@ def _normalize_query_date(date: str) -> str:
 
 
 def get_active_market_value(
-    date: Optional[str] = None,
-    path: Optional[str] = None,
-    duckdb_path: Optional[str] = None,
+    date: str | None = None,
+    path: str | None = None,
+    duckdb_path: str | None = None,
 ) -> ActiveMarketValuePoint | None:
     """获取指定日期或最新一日的活跃市值数据。"""
     rows = load_active_market_value(path, duckdb_path)
@@ -174,11 +174,11 @@ def get_active_market_value(
 
 
 def get_active_market_signal(
-    date: Optional[str] = None,
+    date: str | None = None,
     up_threshold: float = 4.0,
     down_threshold: float = -2.3,
-    path: Optional[str] = None,
-    duckdb_path: Optional[str] = None,
+    path: str | None = None,
+    duckdb_path: str | None = None,
 ) -> str:
     """获取活跃市值择时信号：UP / DOWN / NEUTRAL；无数据返回 NEUTRAL。"""
     point = get_active_market_value(date, path, duckdb_path)
@@ -202,12 +202,12 @@ def _cum_pct(rows: list[ActiveMarketValuePoint], idx: int, lookback: int) -> flo
 
 
 def get_active_market_gate(
-    date: Optional[str] = None,
+    date: str | None = None,
     open_lookback: int = 2,
     open_threshold: float = 4.0,
     clear_threshold: float = -2.3,
-    path: Optional[str] = None,
-    duckdb_path: Optional[str] = None,
+    path: str | None = None,
+    duckdb_path: str | None = None,
 ) -> str:
     """活跃市值全局交易闸门。
 
